@@ -210,6 +210,13 @@ textarea { width: 100%; min-height: 90px; background: var(--card); color: var(--
 .prow .rk.gold { color: var(--mythic); font-weight: 800; }
 .prow .rk.silver { color: var(--common); font-weight: 800; }
 .prow .rk.bronze { color: var(--trash); font-weight: 800; }
+.chip[data-s="daily"] { color: var(--mythic); border: 1.5px solid transparent;
+  background: linear-gradient(var(--panel), var(--panel)) padding-box, linear-gradient(135deg, var(--mythic), var(--anomaly)) border-box; }
+.chip[data-s="daily"][aria-pressed="true"] { color: var(--fg);
+  background: linear-gradient(color-mix(in srgb, var(--mythic) 14%, var(--card)), color-mix(in srgb, var(--mythic) 14%, var(--card))) padding-box,
+    linear-gradient(135deg, var(--mythic), var(--anomaly)) border-box;
+  box-shadow: 0 0 16px -4px color-mix(in srgb, var(--mythic) 65%, transparent); }
+#ranking.daily { border-color: color-mix(in srgb, var(--mythic) 50%, var(--line)); box-shadow: 0 0 26px -12px color-mix(in srgb, var(--mythic) 80%, transparent); }
 
 @media (prefers-reduced-motion: reduce) { .cardb.pop { animation: none; } .bar > i { transition: none; } }
 
@@ -285,8 +292,8 @@ img { max-width: 100%; }
         <button class="chip" data-p="all" aria-pressed="false">All-time</button>
       </div>
       <div class="chips" id="rank-sort">
-        <button class="chip" data-s="best" aria-pressed="true">Best roll</button>
         <button class="chip" data-s="daily" aria-pressed="false">Daily bests</button>
+        <button class="chip" data-s="best" aria-pressed="true">Best roll</button>
         <button class="chip" data-s="avg" aria-pressed="false">Avg EP</button>
         <button class="chip" data-s="rolls" aria-pressed="false">Rolls</button>
       </div>
@@ -995,7 +1002,7 @@ if (!SORTS[rankSort]) rankSort = "best";
 let rankPeriod = (() => { try { return localStorage.getItem("rngdle-pocket-rank-period") || "day"; } catch { return "day"; } })();
 if (!["day", "month", "all"].includes(rankPeriod)) rankPeriod = "day";
 // Which rankings each period offers. "best" is one row per player today, and the top 25 single rolls for month / all-time.
-const PERIOD_SORTS = { day: ["best", "rolls"], month: ["best", "daily", "rolls"], all: ["best", "avg", "rolls"] };
+const PERIOD_SORTS = { day: ["best", "rolls"], month: ["daily", "best", "rolls"], all: ["best", "avg", "rolls"] };
 const RANK_NOTE = {
   best: { day: "Each player's best roll today. Tap one to see it.", month: "The 25 best rolls this month. A player can appear more than once. Tap one to see it.",
           all: "The 25 best rolls of all time. A player can appear more than once. Tap one to see it." },
@@ -1036,6 +1043,7 @@ async function renderRanking() {
   inp.placeholder = myName() || "Your name";
   inp.disabled = $("b-nick").disabled = !ready;
   const box = $("ranking");
+  box.classList.toggle("daily", rankSort === "daily");
   const msg = (t) => { box.innerHTML = `<div class="empty">${t}</div>`; rankList = []; };
   if (playersState === "error") return msg("Can't load the leaderboard right now. Try again later.");
   const sort = SORTS[rankSort];
