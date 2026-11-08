@@ -898,7 +898,7 @@ function afterLogin(data) {
 }
 
 /* ---------- rolls come from the server, with a cooldown ---------- */
-let cooldownUntil = 0, rollBusy = false, rollMsgTimer = null;
+let cooldownUntil = 0, rollBusy = false, rollMsgTimer = null, freeRoll = false;
 const cooldownLeft = () => Math.max(0, cooldownUntil - Date.now());
 function setCooldown(ms) { cooldownUntil = Date.now() + Math.max(0, Number(ms) || 0); updateButton(); }
 setInterval(() => { if (ready && (cooldownLeft() > 0 || $("rollbtn").dataset.cd)) updateButton(); }, 250);
@@ -906,7 +906,7 @@ async function serverRoll() {
   const { data, error } = await rpc("rng_roll", { p_token: token });
   if (error && error.code === "signed_out") { lsDel(TOKEN_KEY); location.reload(); return { error }; }
   if (error) return { error };
-  return data.ok ? { number: data.number, next: data.wait_ms } : { wait: data.wait_ms };
+  return data.ok ? { number: data.number, next: data.wait_ms, free: !!data.free } : { wait: data.wait_ms };
 }
 function rollMsg(t) {
   const el = $("roll-msg"); el.textContent = t; el.hidden = !t;
@@ -1034,11 +1034,14 @@ async function onRoll() {
   rollMsg("");
   setCooldown(r.next);
   pending = r.number;
+  freeRoll = !!r.free;
   window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   // Score and save immediately, so closing the app mid-animation can't undo a roll.
   const { rows, total } = RNG.evaluate(pending);
   const tier = tierFor(total);
-  const { newIds, rank, boardFull, monthRank, dayRank } = record(pending, total, tier, rows);
+  const { newIds, rank, boardFull, monthRank, dayRank } = freeRoll
+    ? { newIds: new Set(rows.filter((x) => !state.badge_counts[x.b.id]).map((x) => x.b.id)) }
+    : record(pending, total, tier, rows);
   let note = null;
   if (rank && (boardFull || rank <= 3)) note = rank === 1 ? "NEW ALL-TIME BEST!" : `New all-time highscore · #${rank}`;
   else if (monthRank === 1 && state.month.rolls > 1) note = "Best roll this month!";

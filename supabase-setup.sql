@@ -205,6 +205,53 @@ begin
 end $$;
 revoke all on function public.rng_reset_all() from public, anon, authenticated;
 
+-- 7. Rigged rolls (owner only): make a player's next rolls land on a chosen number. They don't count for anything.
+create table if not exists public.rng_pranks (
+  account_id uuid primary key references public.rng_accounts(id) on delete cascade,
+  number     int not null check (number between 0 and 1000000),
+  remaining  int not null check (remaining >= 0)
+);
+alter table public.rng_pranks enable row level security;
+revoke all on public.rng_pranks from anon, authenticated;
+
+create or replace function public.rng_roll(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); nxt timestamptz; rigged int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  update public.rng_accounts set next_roll_at = now() + interval '10 seconds'
+   where id = a and next_roll_at <= now()
+  returning next_roll_at into nxt;
+  if not found then
+    select next_roll_at into nxt from public.rng_accounts where id = a;
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
+  end if;
+  update public.rng_pranks set remaining = remaining - 1
+   where account_id = a and remaining > 0
+  returning number into rigged;
+  if rigged is not null then
+    return json_build_object('ok', true, 'number', rigged, 'free', true,
+                             'wait_ms', ceil(extract(epoch from nxt - now()) * 1000));
+  end if;
+  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int,
+                           'wait_ms', ceil(extract(epoch from nxt - now()) * 1000));
+end $$;
+
+-- select public.rng_prank('gurfild', 302539, 10);   -- next 10 rolls of gurfild are 302539
+-- select public.rng_prank('gurfild', 0, 0);         -- stop it early
+create or replace function public.rng_prank(p_username text, p_number int, p_times int) returns text
+  language plpgsql security definer set search_path = public as $$
+declare a uuid;
+begin
+  select id into a from public.rng_accounts where username = lower(trim(p_username));
+  if a is null then return 'No player called ' || p_username; end if;
+  insert into public.rng_pranks (account_id, number, remaining) values (a, p_number, greatest(p_times, 0))
+    on conflict (account_id) do update set number = excluded.number, remaining = excluded.remaining;
+  return case when p_times > 0 then 'Next ' || p_times || ' rolls of ' || p_username || ' will be ' || p_number || ' (not counted).'
+              else 'Prank for ' || p_username || ' switched off.' end;
+end $$;
+revoke all on function public.rng_prank(text, int, int) from public, anon, authenticated;
+
 -- Owner tools (run by hand in the SQL Editor when needed):
 --   delete all scores (keeps accounts):  select public.rng_reset_all();
 --   reset a password:  update public.rng_accounts set pw_hash = extensions.crypt('newpass123', extensions.gen_salt('bf', 10)) where username = 'name';
