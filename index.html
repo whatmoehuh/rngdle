@@ -272,7 +272,7 @@ img { max-width: 100%; }
     </section>
 
     <section id="view-ranking" class="view" hidden>
-      <div class="sechead"><h2>Leaderboard</h2><p id="rank-sub">Everyone on the player list</p></div>
+      <div class="sechead"><h2>Leaderboard</h2><p id="rank-sub">Everyone who plays</p></div>
       <div class="nickrow">
         <input id="nick" maxlength="20" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Your name on the leaderboard" aria-label="Your name on the leaderboard">
         <button class="btn2" id="b-nick">Save name</button>
@@ -327,17 +327,7 @@ img { max-width: 100%; }
         </div>
         <p class="note" id="backup-msg" aria-live="polite"></p>
       </div>
-      <div class="panel" id="admin" hidden>
-        <h3>PLAYER LIST</h3>
-        <p class="note">Only these emails can sign in, play and see the leaderboard.</p>
-        <form id="f-add" class="nickrow" novalidate>
-          <input id="add-email" type="email" autocomplete="off" autocapitalize="off" placeholder="friend@example.com" aria-label="Email to add">
-          <button class="btn2" type="submit">Add</button>
-        </form>
-        <div class="rows" id="allowed"></div>
-        <p class="note" id="admin-msg" aria-live="polite"></p>
-      </div>
-      <div class="account"><span>Signed in as <b id="me-email"></b></span><button class="btn2" id="b-signout">Sign out</button></div>
+      <div class="account"><span>Signed in as <b id="me-name"></b></span><button class="btn2" id="b-signout">Sign out</button></div>
       <div class="btnrow" style="justify-content:flex-end"><button class="btn2 danger" id="b-reset">Reset all progress</button></div>
     </section>
   </main>
@@ -347,33 +337,17 @@ img { max-width: 100%; }
   <div class="gate-card">
     <div class="brand">RNGdle <small>pocket</small></div>
     <div id="gate-login" hidden style="display:grid;gap:14px">
-      <p>Sign in to play. First time here? Enter your email, choose a password and tap Create account.</p>
+      <p>Sign in to play. First time here? Pick a username and a password, then tap Create account.</p>
       <form id="f-login">
-        <label for="email">Email</label>
-        <input id="email" type="email" autocomplete="username" autocapitalize="off" inputmode="email" required>
+        <label for="username">Username</label>
+        <input id="username" autocomplete="username" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="20" required>
         <label for="password">Password</label>
-        <input id="password" type="password" autocomplete="current-password" minlength="6" required>
+        <input id="password" type="password" autocomplete="current-password" maxlength="72" required>
         <button class="rollbtn" type="submit">SIGN IN</button>
-        <div class="btnrow" style="justify-content:space-between">
-          <button class="btn2" type="button" id="b-signup">Create account</button>
-          <button class="linkbtn" type="button" id="b-forgot">Forgot password?</button>
-        </div>
+        <button class="btn2" type="button" id="b-signup" style="height:48px">Create account</button>
       </form>
       <p class="note" id="gate-msg" aria-live="polite"></p>
-    </div>
-    <div id="gate-newpw" hidden style="display:grid;gap:14px">
-      <p>Choose a new password.</p>
-      <form id="f-newpw">
-        <label for="newpw">New password</label>
-        <input id="newpw" type="password" autocomplete="new-password" minlength="6" required>
-        <button class="rollbtn" type="submit">SAVE PASSWORD</button>
-      </form>
-      <p class="note" id="newpw-msg" aria-live="polite"></p>
-    </div>
-    <div id="gate-wait" hidden><p>Checking the player list…</p></div>
-    <div id="gate-no" hidden style="display:grid;gap:14px">
-      <p>You're signed in as <b id="gate-email"></b>, but this email isn't on the player list yet. Ask the owner to add it, then tap Try again.</p>
-      <div class="btnrow"><button class="btn2" id="b-reload">Try again</button><button class="btn2" id="b-signout2">Sign out</button></div>
+      <p class="note">Forgot your password? Ask the person who runs the game to reset it.</p>
     </div>
     <div id="gate-err" hidden style="display:grid;gap:14px">
       <p id="gate-err-msg"></p>
@@ -385,7 +359,6 @@ img { max-width: 100%; }
 <div class="rollbar" id="rollbar"><button class="rollbtn" id="rollbtn">ROLL</button></div>
 
 <script src="config.js"></script>
-<script src="vendor/supabase.js"></script>
 <script>
 /* RNGdle badge rules – JavaScript port of rngdle_badges.py.
    Verified against the Python version over all 1,000,001 rolls (verify_js.js). */
@@ -818,169 +791,140 @@ function record(n, total, tier, rows) {
   return { newIds, rank, boardFull, monthRank: pr.month, dayRank: pr.day };
 }
 
-/* ================= server (Supabase): sign-in, own private save, shared leaderboard ================= */
-// Opened from a "set a new password" email? (read before the library tidies up the address)
-let recovering = /type=recovery/.test(location.hash) || /type=recovery/.test(location.search);
+/* ================= server (Supabase database functions): accounts, own save, shared leaderboard ================= */
 // The Supabase address and public key live in config.js, next to this page.
 const CFG = window.RNGDLE_CONFIG || {};
 const CONFIGURED = /^https:\/\/.+\.supabase\.co\/?$/.test(CFG.supabaseUrl || "") && !!CFG.supabaseKey && !/YOUR/.test(CFG.supabaseKey);
-const sb = CONFIGURED && window.supabase ? window.supabase.createClient(CFG.supabaseUrl, CFG.supabaseKey, {
-  auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
-}) : null;
-const LS_KEY = "rngdle-site-save-v1";
+/** Call one of the rng_* database functions. Never throws: returns {data} or {error: {code}}. */
+async function rpc(fn, args, keepalive = false) {
+  let res;
+  try {
+    res = await fetch(`${String(CFG.supabaseUrl).replace(/\/$/, "")}/rest/v1/rpc/${fn}`, {
+      method: "POST", keepalive,
+      headers: { apikey: CFG.supabaseKey, "Content-Type": "application/json" },
+      body: JSON.stringify(args || {}),
+    });
+  } catch { return { error: { code: "network" } }; }
+  const text = await res.text();
+  let body = null; try { body = text ? JSON.parse(text) : null; } catch {}
+  if (!res.ok) return { error: { code: (body && body.message) || "http_" + res.status, status: res.status } };
+  return { data: body };
+}
+const LS_KEY = "rngdle-site-save-v1", TOKEN_KEY = "rngdle-site-token";
 function lsGet(k) { try { const t = localStorage.getItem(k); return t ? JSON.parse(t) : null; } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+function lsDel(k) { try { localStorage.removeItem(k); } catch {} }
 let lsKey = null;
 function lsSave() { if (lsKey) lsSet(lsKey, state); }
-let uid = null, myEmail = "", isAdmin = false, ready = false, loggingIn = false;
+let uid = null, token = null, username = "", ready = false;
 let remoteReady = false, writing = false, dirty = false, saveTimer = null, syncState = "loading", nick = "";
 const SYNC_TEXT = { loading: "Loading your save…", synced: "Saved online", pending: "Saving…", saving: "Saving…",
   error: "Couldn't save online, kept on this phone. Retrying", unreachable: "Can't reach the server, retrying" };
 function setSync(s) { syncState = s; const el = $("sync"); if (!el) return; el.dataset.s = s; el.lastElementChild.textContent = SYNC_TEXT[s] || s; }
 const clone = (o) => JSON.parse(JSON.stringify(o));
-const myName = () => myEmail.split("@")[0];
+const myName = () => username;
 const nickKey = () => `rngdle-site-nick:${uid}`;
 const NOT_REACHABLE = "Can't reach the game server. If nobody has played for a week, it's paused: the owner can wake it up in the Supabase dashboard.";
 
 /* ---------- sign-in gate ---------- */
 function showGate(mode, msg) {
   $("gate").hidden = false;
-  for (const m of ["login", "newpw", "wait", "no", "err"]) $("gate-" + m).hidden = m !== mode;
-  if (mode === "no") $("gate-email").textContent = myEmail;
+  for (const m of ["login", "err"]) $("gate-" + m).hidden = m !== mode;
   if (mode === "err") $("gate-err-msg").textContent = msg || NOT_REACHABLE;
 }
 function hideGate() { $("gate").hidden = true; }
 function gateMsg(t) { $("gate-msg").textContent = t; }
-function authErrorText(error) {
-  if (!error) return "";
-  const m = error.message || "";
-  if (error.status === 429 || /rate|too many/i.test(m)) return "Too many emails right now. Wait a few minutes, then try again.";
-  if (/fetch|network|load failed/i.test(m)) return NOT_REACHABLE;
-  if (/invalid login credentials/i.test(m)) return "Wrong email or password. New here? Tap Create account.";
-  if (/email not confirmed/i.test(m)) return "Confirm your email first: tap the link in the email we sent you, then sign in here.";
-  if (/already registered|already exists/i.test(m)) return "There's already an account for this email. Sign in, or use Forgot password.";
-  if (/password/i.test(m) && /least|characters|short|weak/i.test(m)) return "Choose a password with at least 6 characters.";
-  return m || "Something went wrong. Try again.";
-}
-const SITE = location.origin + location.pathname;
-function creds() { return { email: $("email").value.trim().toLowerCase(), password: $("password").value }; }
+const ERRORS = {
+  wrong_login: "Wrong username or password. New here? Tap Create account.",
+  username_taken: "That username is already taken. Pick another one.",
+  bad_username: "Usernames are 3–20 characters: letters, numbers or _.",
+  bad_password: "Choose a password with 6 to 72 characters.",
+};
+const errText = (e) => ERRORS[e.code] || (e.code === "network" || e.status >= 500 ? NOT_REACHABLE : "Something went wrong. Try again.");
+function creds() { return { p_username: $("username").value.trim(), p_password: $("password").value }; }
 function busy(on) { for (const b of $("gate-login").querySelectorAll("button")) b.disabled = on; }
-$("f-login").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const { email, password } = creds();
-  if (!email || !password) { gateMsg("Enter your email and password."); return; }
-  busy(true); gateMsg("Signing in…");
-  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+async function signIn(fn) {
+  const c = creds();
+  if (!c.p_username || !c.p_password) { gateMsg("Enter a username and a password."); return; }
+  if (fn === "rng_register") {
+    if (!/^[A-Za-z0-9_]{3,20}$/.test(c.p_username)) { gateMsg(ERRORS.bad_username); return; }
+    if (c.p_password.length < 6) { gateMsg(ERRORS.bad_password); return; }
+  }
+  busy(true); gateMsg(fn === "rng_register" ? "Creating your account…" : "Signing in…");
+  const { data, error } = await rpc(fn, c);
   busy(false);
-  if (error) { gateMsg(authErrorText(error)); return; }
-  gateMsg(""); afterLogin(data.session);
+  if (error) { gateMsg(errText(error)); return; }
+  gateMsg(""); $("password").value = "";
+  token = data.token; lsSet(TOKEN_KEY, token);
+  afterLogin(data);
+}
+$("f-login").addEventListener("submit", (e) => { e.preventDefault(); signIn("rng_login"); });
+$("b-signup").addEventListener("click", () => signIn("rng_register"));
+$("b-reload2").addEventListener("click", () => location.reload());
+$("b-signout").addEventListener("click", async () => {
+  await flush();
+  await rpc("rng_logout", { p_token: token });
+  lsDel(TOKEN_KEY); location.reload();
 });
-$("b-signup").addEventListener("click", async () => {
-  const { email, password } = creds();
-  if (!email || !password) { gateMsg("Enter your email and choose a password, then tap Create account."); return; }
-  if (password.length < 6) { gateMsg("Choose a password with at least 6 characters."); return; }
-  busy(true); gateMsg("Creating your account…");
-  const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: SITE } });
-  busy(false);
-  if (error) { gateMsg(authErrorText(error)); return; }
-  if (data.session) { gateMsg(""); afterLogin(data.session); return; }
-  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) { gateMsg(authErrorText({ message: "already registered" })); return; }
-  gateMsg(`Almost done: we emailed a confirmation link to ${email} (check spam too). Tap it once, then come back here and sign in with your password.`);
-});
-$("b-forgot").addEventListener("click", async () => {
-  const { email } = creds();
-  if (!email) { gateMsg("Enter your email first, then tap Forgot password."); return; }
-  busy(true);
-  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: SITE });
-  busy(false);
-  gateMsg(error ? authErrorText(error) : `If there's an account for ${email}, we've emailed a link. Open it, choose a new password, then sign in here.`);
-});
-$("f-newpw").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const password = $("newpw").value;
-  if (password.length < 6) { $("newpw-msg").textContent = "Choose a password with at least 6 characters."; return; }
-  const { data, error } = await sb.auth.updateUser({ password });
-  if (error) { $("newpw-msg").textContent = authErrorText(error); return; }
-  recovering = false;
-  const { data: { session } } = await sb.auth.getSession();
-  if (session) afterLogin(session); else showGate("login");
-});
-for (const id of ["b-reload", "b-reload2"]) $(id).addEventListener("click", () => location.reload());
-for (const id of ["b-signout", "b-signout2"]) $(id).addEventListener("click", async () => { await flush(); await sb.auth.signOut(); location.reload(); });
 
 async function connect() {
-  if (!sb) { showGate("err", CONFIGURED ? NOT_REACHABLE : "Setup isn't finished yet: config.js still needs the Supabase address and key."); return; }
-  sb.auth.onAuthStateChange((event, session) => {
-    if (event === "PASSWORD_RECOVERY") { recovering = true; setTimeout(() => showGate("newpw"), 0); return; }
-    if (!recovering && session && session.user && session.user.id !== uid) setTimeout(() => afterLogin(session), 0);   // e.g. after tapping the confirmation link
-  });
-  let session = null;
-  try { ({ data: { session } } = await sb.auth.getSession()); } catch {}
-  if (recovering) showGate("newpw");
-  else if (session) afterLogin(session); else showGate("login");
-}
-async function afterLogin(session) {
-  if (loggingIn || uid === session.user.id) return;
-  loggingIn = true;
-  showGate("wait");
-  myEmail = (session.user.email || "").toLowerCase();
-  const { data, error } = await sb.from("players_allowed").select("is_admin").eq("email", myEmail).maybeSingle();
-  loggingIn = false;
+  if (!CONFIGURED) { showGate("err", "Setup isn't finished yet: config.js still needs the Supabase address and key."); return; }
+  token = lsGet(TOKEN_KEY);
+  if (!token) { showGate("login"); return; }
+  const { data, error } = await rpc("rng_load", { p_token: token });
+  if (error && error.code === "signed_out") { lsDel(TOKEN_KEY); token = null; showGate("login"); return; }
   if (error) { showGate("err"); return; }
-  if (!data) { showGate("no"); return; }
-  uid = session.user.id; isAdmin = !!data.is_admin;
+  afterLogin(data);
+}
+function afterLogin(data) {
+  uid = data.id; username = data.username || "";
   lsKey = LS_KEY + ":" + uid;
   state = normalize(lsGet(lsKey));
   nick = String(lsGet(nickKey()) || "");
-  $("me-email").textContent = myEmail;
+  $("me-name").textContent = username;
   hideGate();
+  remoteReady = true;
+  const remote = data.save ? normalize(data.save) : null;
+  if (remote && remote.rolls >= state.rolls) { state = remote; lsSave(); setSync("synced"); }
+  else if (state.rolls > 0) { dirty = true; flush(); }                    // this phone has newer rolls
+  else setSync("synced");
   ready = true; renderChrome(); updateButton(); markDirtyViews();
-  readRemote(); fetchBoard(); renderAdmin();
+  fetchBoard();
   setInterval(() => { if (document.visibilityState === "visible") fetchBoard(); }, 20000);
 }
 
-/* ---------- own save ---------- */
-async function readRemote() {
-  setSync("loading");
-  const { data, error } = await sb.from("saves").select("data").eq("user_id", uid).maybeSingle();
-  if (error) { setSync("unreachable"); return setTimeout(readRemote, 15000); }
-  remoteReady = true;
-  const remote = data ? normalize(data.data) : null;
-  if (remote && remote.rolls >= state.rolls) {
-    if (phase !== "spinning" && phase !== "revealing") { state = remote; lsSave(); renderChrome(); markDirtyViews(); }
-    setSync("synced"); pushPlayer();
-  } else if (state.rolls > 0) { dirty = true; flush(); }                 // this phone has newer rolls
-  else { setSync("synced"); pushPlayer(); }
-}
+/* ---------- own save + leaderboard row (one request) ---------- */
 function scheduleSave() {
   lsSave();
   if (!uid || !remoteReady) return;
   dirty = true; setSync("pending");
   clearTimeout(saveTimer); saveTimer = setTimeout(flush, 2000);
 }
-async function flush() {
+async function flush(keepalive = false) {
   clearTimeout(saveTimer); saveTimer = null;
   if (!uid || !remoteReady || writing || !dirty) return;
   writing = true; dirty = false; setSync("saving");
-  const { error } = await sb.from("saves").upsert({ user_id: uid, data: clone(state), updated_at: new Date().toISOString() });
+  const { error } = await rpc("rng_save", { p_token: token, p_save: clone(state), p_board: summary() }, keepalive);
   writing = false;
+  if (error && error.code === "signed_out") { lsDel(TOKEN_KEY); location.reload(); return; }
   if (error) { dirty = true; setSync("error"); saveTimer = setTimeout(flush, 5000 + Math.random() * 5000); return; }
   setSync(dirty ? "pending" : "synced");
   if (dirty) saveTimer = setTimeout(flush, 2000);
-  pushPlayer();
+  if (view === "ranking") fetchBoard();
 }
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { lsSave(); flush(); } else if (ready) fetchBoard(); });
-window.addEventListener("pagehide", () => { lsSave(); flush(); });
+const pushPlayer = () => { if (!uid) return; dirty = true; flush(); };
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { lsSave(); flush(true); } else if (ready) fetchBoard(); });
+window.addEventListener("pagehide", () => { lsSave(); flush(true); });
 
 /* ---------- leaderboard ---------- */
-let lastPlayer = "", pWriting = false, pAgain = false;
+let lastPlayer = "";
 function periodSummary(P) {
   const b = P.highscores[0];
   return { rolls: P.rolls, total_ep: P.total_ep, best_ep: b ? b.ep : 0, best_number: b ? b.number : null,
     best_tier: b ? b.tier : null, best_top: b && b.top ? b.top.slice(0, 1) : [] };
 }
 function summary() {
-  return Object.assign({ nick: nick.slice(0, 20), name: myName(), found: discovered() }, periodSummary(state),
+  return Object.assign({ nick: nick.slice(0, 20), found: discovered() }, periodSummary(state),
     { day: Object.assign({ key: periodKey("day") }, periodSummary(periodOf(state, "day"))),
       month: Object.assign({ key: periodKey("month") }, periodSummary(periodOf(state, "month"))) });
 }
@@ -990,64 +934,16 @@ function playerPeriod(p, period) {
   const q = p[period];
   return q && q.key === periodKey(period) ? q : null;
 }
-async function pushPlayer() {
-  if (!uid || !remoteReady) return;
-  if (pWriting) { pAgain = true; return; }
-  const sm = summary(), js = JSON.stringify(sm);
-  if (js === lastPlayer || (sm.rolls === 0 && !sm.nick)) return;
-  pWriting = true;
-  const { error } = await sb.from("board").upsert({ user_id: uid, data: sm, updated_at: new Date().toISOString() });
-  pWriting = false;
-  if (!error) { lastPlayer = js; fetchBoard(); }
-  if (pAgain) { pAgain = false; pushPlayer(); }
-}
 let players = [], playersState = "loading", boardBusy = false;
 async function fetchBoard() {
   if (!uid || boardBusy) return;
   boardBusy = true;
-  const { data, error } = await sb.from("board").select("user_id,data");
+  const { data, error } = await rpc("rng_board", { p_token: token });
   boardBusy = false;
   if (error) { if (!players.length) playersState = "error"; }
-  else { players = data.map((r) => Object.assign({}, r.data, { id: r.user_id })); playersState = "ok"; }
+  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username })); playersState = "ok"; }
   dirtyViews.add("ranking"); if (view === "ranking") renderRanking();
 }
-
-/* ---------- player list (owner only) ---------- */
-let removeArmed = null;
-async function renderAdmin() {
-  $("admin").hidden = !isAdmin;
-  if (!isAdmin) return;
-  const { data, error } = await sb.from("players_allowed").select("email,is_admin").order("email");
-  const box = $("allowed");
-  if (error) { box.innerHTML = `<div class="empty">Can't load the player list right now.</div>`; return; }
-  box.innerHTML = data.map((r) =>
-    `<div class="row arow"><span class="nm"><b></b><small>${r.is_admin ? "owner" : "player"}</small></span>` +
-    (r.is_admin ? "<span></span>" : `<button class="btn2 small" data-email="">Remove</button>`) + `</div>`).join("") ||
-    `<div class="empty">No players yet.</div>`;
-  box.querySelectorAll(".arow").forEach((row, i) => {
-    row.querySelector("b").textContent = data[i].email;
-    const b = row.querySelector("button"); if (b) b.dataset.email = data[i].email;
-  });
-}
-$("f-add").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const email = $("add-email").value.trim().toLowerCase();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { $("admin-msg").textContent = "That doesn't look like an email address."; return; }
-  const { error } = await sb.from("players_allowed").insert({ email });
-  if (error) { $("admin-msg").textContent = error.code === "23505" ? `${email} is already on the list.` : "Couldn't add that email. Try again."; return; }
-  $("add-email").value = "";
-  $("admin-msg").textContent = `Added ${email}. They can now sign in on the site with that email.`;
-  renderAdmin();
-});
-$("allowed").addEventListener("click", async (e) => {
-  const b = e.target.closest("button[data-email]"); if (!b) return;
-  const email = b.dataset.email;
-  if (removeArmed !== email) { removeArmed = email; b.textContent = "Tap again"; setTimeout(() => { if (removeArmed === email) { removeArmed = null; renderAdmin(); } }, 4000); return; }
-  removeArmed = null;
-  const { error } = await sb.from("players_allowed").delete().eq("email", email);
-  $("admin-msg").textContent = error ? "Couldn't remove that email. Try again." : `Removed ${email}. They can't play anymore and are off the leaderboard.`;
-  renderAdmin();
-});
 
 const SORTS = {
   best: { val: (p) => p.best_ep || 0, show: (p) => fmt(p.best_ep || 0), unit: (p) => p.best_tier || "", color: (p) => (p.best_tier ? cvar(p.best_tier) : "var(--fg)") },
@@ -1378,7 +1274,7 @@ $("b-reset").addEventListener("click", () => {
   }
   clearTimeout(resetTimer); resetArmed = false; b.textContent = "Reset all progress";
   state = emptyState(); dirty = true; scheduleSave(); flush();
-  if (uid) { lastPlayer = ""; sb.from("board").delete().eq("user_id", uid).then(fetchBoard); }
+  if (uid) { lastPlayer = ""; }
   result = null; phase = "idle"; $("cards").innerHTML = ""; renderStage(); renderListHead(); updateButton();
   renderChrome(); markDirtyViews(); renderStats();
   $("backup-msg").textContent = "All progress deleted.";
