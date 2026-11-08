@@ -226,7 +226,6 @@ img { max-width: 100%; }
 .gate label { font-size: 13px; font-weight: 600; color: var(--muted); }
 .gate input { height: 52px; border-radius: 14px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); padding: 0 14px;
   font: 600 17px var(--f-body); }
-.gate input#code { font: 800 24px var(--f-num); letter-spacing: .3em; text-align: center; }
 .gate input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .gate .rollbtn { height: 54px; font-size: 18px; }
 .gate .rollbtn:disabled { opacity: .6; }
@@ -348,19 +347,28 @@ img { max-width: 100%; }
   <div class="gate-card">
     <div class="brand">RNGdle <small>pocket</small></div>
     <div id="gate-login" hidden style="display:grid;gap:14px">
-      <p>Sign in with your email address. You'll get a code to type in here.</p>
-      <form id="f-email">
+      <p>Sign in to play. First time here? Enter your email, choose a password and tap Create account.</p>
+      <form id="f-login">
         <label for="email">Email</label>
-        <input id="email" type="email" autocomplete="email" autocapitalize="off" inputmode="email" required>
-        <button class="rollbtn" type="submit">SEND CODE</button>
-      </form>
-      <form id="f-code" hidden>
-        <label for="code">Code from the email</label>
-        <input id="code" inputmode="numeric" autocomplete="one-time-code" maxlength="10" required>
+        <input id="email" type="email" autocomplete="username" autocapitalize="off" inputmode="email" required>
+        <label for="password">Password</label>
+        <input id="password" type="password" autocomplete="current-password" minlength="6" required>
         <button class="rollbtn" type="submit">SIGN IN</button>
-        <button class="linkbtn" type="button" id="b-back">Use a different email</button>
+        <div class="btnrow" style="justify-content:space-between">
+          <button class="btn2" type="button" id="b-signup">Create account</button>
+          <button class="linkbtn" type="button" id="b-forgot">Forgot password?</button>
+        </div>
       </form>
       <p class="note" id="gate-msg" aria-live="polite"></p>
+    </div>
+    <div id="gate-newpw" hidden style="display:grid;gap:14px">
+      <p>Choose a new password.</p>
+      <form id="f-newpw">
+        <label for="newpw">New password</label>
+        <input id="newpw" type="password" autocomplete="new-password" minlength="6" required>
+        <button class="rollbtn" type="submit">SAVE PASSWORD</button>
+      </form>
+      <p class="note" id="newpw-msg" aria-live="polite"></p>
     </div>
     <div id="gate-wait" hidden><p>Checking the player list…</p></div>
     <div id="gate-no" hidden style="display:grid;gap:14px">
@@ -811,6 +819,8 @@ function record(n, total, tier, rows) {
 }
 
 /* ================= server (Supabase): sign-in, own private save, shared leaderboard ================= */
+// Opened from a "set a new password" email? (read before the library tidies up the address)
+let recovering = /type=recovery/.test(location.hash) || /type=recovery/.test(location.search);
 // The Supabase address and public key live in config.js, next to this page.
 const CFG = window.RNGDLE_CONFIG || {};
 const CONFIGURED = /^https:\/\/.+\.supabase\.co\/?$/.test(CFG.supabaseUrl || "") && !!CFG.supabaseKey && !/YOUR/.test(CFG.supabaseKey);
@@ -835,53 +845,79 @@ const NOT_REACHABLE = "Can't reach the game server. If nobody has played for a w
 /* ---------- sign-in gate ---------- */
 function showGate(mode, msg) {
   $("gate").hidden = false;
-  for (const m of ["login", "wait", "no", "err"]) $("gate-" + m).hidden = m !== mode;
+  for (const m of ["login", "newpw", "wait", "no", "err"]) $("gate-" + m).hidden = m !== mode;
   if (mode === "no") $("gate-email").textContent = myEmail;
   if (mode === "err") $("gate-err-msg").textContent = msg || NOT_REACHABLE;
 }
 function hideGate() { $("gate").hidden = true; }
-let pendingEmail = "";
 function gateMsg(t) { $("gate-msg").textContent = t; }
 function authErrorText(error) {
   if (!error) return "";
-  if (error.status === 429 || /rate|too many/i.test(error.message || "")) return "Too many emails right now. Wait a few minutes, then try again.";
-  if (/fetch|network|load failed/i.test(error.message || "")) return NOT_REACHABLE;
-  return error.message || "Something went wrong. Try again.";
+  const m = error.message || "";
+  if (error.status === 429 || /rate|too many/i.test(m)) return "Too many emails right now. Wait a few minutes, then try again.";
+  if (/fetch|network|load failed/i.test(m)) return NOT_REACHABLE;
+  if (/invalid login credentials/i.test(m)) return "Wrong email or password. New here? Tap Create account.";
+  if (/email not confirmed/i.test(m)) return "Confirm your email first: tap the link in the email we sent you, then sign in here.";
+  if (/already registered|already exists/i.test(m)) return "There's already an account for this email. Sign in, or use Forgot password.";
+  if (/password/i.test(m) && /least|characters|short|weak/i.test(m)) return "Choose a password with at least 6 characters.";
+  return m || "Something went wrong. Try again.";
 }
-$("f-email").addEventListener("submit", async (e) => {
+const SITE = location.origin + location.pathname;
+function creds() { return { email: $("email").value.trim().toLowerCase(), password: $("password").value }; }
+function busy(on) { for (const b of $("gate-login").querySelectorAll("button")) b.disabled = on; }
+$("f-login").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const email = $("email").value.trim().toLowerCase();
-  if (!email) return;
-  const btn = e.submitter || $("f-email").querySelector("button"); btn.disabled = true; gateMsg("Sending…");
-  const { error } = await sb.auth.signInWithOtp({ email, options: { emailRedirectTo: location.origin + location.pathname } });
-  btn.disabled = false;
+  const { email, password } = creds();
+  if (!email || !password) { gateMsg("Enter your email and password."); return; }
+  busy(true); gateMsg("Signing in…");
+  const { data, error } = await sb.auth.signInWithPassword({ email, password });
+  busy(false);
   if (error) { gateMsg(authErrorText(error)); return; }
-  pendingEmail = email;
-  $("f-email").hidden = true; $("f-code").hidden = false; $("code").value = ""; $("code").focus();
-  gateMsg(`We sent a code to ${email}. It can take a minute, and it may land in spam.`);
+  gateMsg(""); afterLogin(data.session);
 });
-$("f-code").addEventListener("submit", async (e) => {
+$("b-signup").addEventListener("click", async () => {
+  const { email, password } = creds();
+  if (!email || !password) { gateMsg("Enter your email and choose a password, then tap Create account."); return; }
+  if (password.length < 6) { gateMsg("Choose a password with at least 6 characters."); return; }
+  busy(true); gateMsg("Creating your account…");
+  const { data, error } = await sb.auth.signUp({ email, password, options: { emailRedirectTo: SITE } });
+  busy(false);
+  if (error) { gateMsg(authErrorText(error)); return; }
+  if (data.session) { gateMsg(""); afterLogin(data.session); return; }
+  if (data.user && Array.isArray(data.user.identities) && data.user.identities.length === 0) { gateMsg(authErrorText({ message: "already registered" })); return; }
+  gateMsg(`Almost done: we emailed a confirmation link to ${email} (check spam too). Tap it once, then come back here and sign in with your password.`);
+});
+$("b-forgot").addEventListener("click", async () => {
+  const { email } = creds();
+  if (!email) { gateMsg("Enter your email first, then tap Forgot password."); return; }
+  busy(true);
+  const { error } = await sb.auth.resetPasswordForEmail(email, { redirectTo: SITE });
+  busy(false);
+  gateMsg(error ? authErrorText(error) : `If there's an account for ${email}, we've emailed a link. Open it, choose a new password, then sign in here.`);
+});
+$("f-newpw").addEventListener("submit", async (e) => {
   e.preventDefault();
-  const token = $("code").value.replace(/\s+/g, "");
-  if (!token) return;
-  const btn = e.submitter || $("f-code").querySelector("button"); btn.disabled = true; gateMsg("Checking…");
-  const { data, error } = await sb.auth.verifyOtp({ email: pendingEmail, token, type: "email" });
-  btn.disabled = false;
-  if (error) { gateMsg(/expired|invalid/i.test(error.message || "") ? "That code didn't work or has expired. Check it, or go back and request a new one." : authErrorText(error)); return; }
-  if (data && data.session) afterLogin(data.session);
+  const password = $("newpw").value;
+  if (password.length < 6) { $("newpw-msg").textContent = "Choose a password with at least 6 characters."; return; }
+  const { data, error } = await sb.auth.updateUser({ password });
+  if (error) { $("newpw-msg").textContent = authErrorText(error); return; }
+  recovering = false;
+  const { data: { session } } = await sb.auth.getSession();
+  if (session) afterLogin(session); else showGate("login");
 });
-$("b-back").addEventListener("click", () => { $("f-code").hidden = true; $("f-email").hidden = false; gateMsg(""); });
 for (const id of ["b-reload", "b-reload2"]) $(id).addEventListener("click", () => location.reload());
 for (const id of ["b-signout", "b-signout2"]) $(id).addEventListener("click", async () => { await flush(); await sb.auth.signOut(); location.reload(); });
 
 async function connect() {
   if (!sb) { showGate("err", CONFIGURED ? NOT_REACHABLE : "Setup isn't finished yet: config.js still needs the Supabase address and key."); return; }
   sb.auth.onAuthStateChange((event, session) => {
-    if (session && session.user && session.user.id !== uid) setTimeout(() => afterLogin(session), 0);   // e.g. after tapping the email link
+    if (event === "PASSWORD_RECOVERY") { recovering = true; setTimeout(() => showGate("newpw"), 0); return; }
+    if (!recovering && session && session.user && session.user.id !== uid) setTimeout(() => afterLogin(session), 0);   // e.g. after tapping the confirmation link
   });
   let session = null;
   try { ({ data: { session } } = await sb.auth.getSession()); } catch {}
-  if (session) afterLogin(session); else showGate("login");
+  if (recovering) showGate("newpw");
+  else if (session) afterLogin(session); else showGate("login");
 }
 async function afterLogin(session) {
   if (loggingIn || uid === session.user.id) return;
