@@ -965,8 +965,6 @@ async function fetchBoard() {
   boardBusy = false;
   if (error) { if (!players.length) playersState = "error"; }
   else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username, crown: !!r.crown })); playersState = "ok"; }
-  const champ = players.find((p) => p.crown);
-  $("rank-sub").textContent = champ ? `👑 ${champ.nick || champ.name} had yesterday's best roll` : "Everyone who plays";
   dirtyViews.add("ranking"); if (view === "ranking") renderRanking();
 }
 
@@ -1005,7 +1003,7 @@ async function renderRanking() {
     const em = p.best_top && p.best_top[0] && BY_ID[p.best_top[0]] ? [...new Intl.Segmenter().segment(BY_ID[p.best_top[0]].e)][0].segment : "🎲";
     const sub = rankSort === "best" && p.best_number != null ? `best ${p.best_number}` : `${fmt(p.rolls || 0)} rolls · ${p.found || 0} badges`;
     return `<button class="row prow${p.id === uid ? " me" : ""}" data-k="${i}"><span class="rk ${medal}">${i + 1}</span><span class="av" data-em="${em}">${em}</span>` +
-      `<span class="nm"><b><span class="pn"></span>${p.crown ? `<span class="crown" title="Best roll yesterday" aria-label="Best roll yesterday">👑</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b><small>${esc(sub)}</small></span>` +
+      `<span class="nm"><b><span class="pn"></span>${p.crown ? `<span class="crown">👑</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b><small>${esc(sub)}</small></span>` +
       `<span class="val" style="color:${sort.color(p)}">${sort.show(p)}<small>${esc(sort.unit(p))}</small></span></button>`;
   }).join("");
   const rows = box.querySelectorAll(".prow");
