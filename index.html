@@ -286,12 +286,12 @@ img { max-width: 100%; }
       </div>
       <div class="chips" id="rank-sort">
         <button class="chip" data-s="best" aria-pressed="true">Best roll</button>
+        <button class="chip" data-s="daily" aria-pressed="false">Daily bests</button>
         <button class="chip" data-s="avg" aria-pressed="false">Avg EP</button>
-        <button class="chip" data-s="found" aria-pressed="false">Badges</button>
         <button class="chip" data-s="rolls" aria-pressed="false">Rolls</button>
       </div>
       <div class="rows" id="ranking"><div class="empty">Loading leaderboard…</div></div>
-      <p class="note">Tap a player to see their best roll. Days and months start at midnight German time. Best roll rewards rolling a lot; Avg EP is the fairer luck test.</p>
+      <p class="note" id="rank-note"></p>
     </section>
 
     <section id="view-scores" class="view" hidden>
@@ -704,7 +704,7 @@ const DIST = {"rolls":1000001,"quantiles":[1759,1769,1769,1786,1786,1786,1786,17
 RNG.init(META);
 const BY_ID = Object.fromEntries(RNG.BADGES.map((b) => [b.id, b]));
 const TOTAL_BADGES = RNG.BADGES.length;
-const HIGHSCORE_SLOTS = 20;
+const HIGHSCORE_SLOTS = 25;
 const RARITY_VAR = { TRASH: "--trash", COMMON: "--common", UNCOMMON: "--uncommon", RARE: "--rare", EPIC: "--epic", ANOMALY: "--anomaly", MYTHIC: "--mythic" };
 const RARITY_ORDER = ["MYTHIC", "ANOMALY", "EPIC", "RARE", "UNCOMMON", "COMMON", "TRASH"];
 const BAND = { TRASH: "Bottom 1%", COMMON: "Bottom 50%", UNCOMMON: "Top 50–25%", RARE: "Top 25–10%", EPIC: "Top 10–5%", ANOMALY: "Top 5–1%", MYTHIC: "Top 1%" };
@@ -946,10 +946,12 @@ function periodSummary(P) {
   return { rolls: P.rolls, total_ep: P.total_ep, best_ep: b ? b.ep : 0, best_number: b ? b.number : null,
     best_tier: b ? b.tier : null, best_top: b && b.top ? b.top.slice(0, 1) : [] };
 }
+const compact = (list) => list.slice(0, 25).map((e) => ({ n: e.number, ep: e.ep, t: e.tier, b: (e.top || [])[0] || null, d: e.date }));
 function summary() {
-  return Object.assign({ nick: nick.slice(0, 20), found: discovered() }, periodSummary(state),
+  const month = periodOf(state, "month");
+  return Object.assign({ nick: nick.slice(0, 20), found: discovered(), top_all: compact(state.highscores) }, periodSummary(state),
     { day: Object.assign({ key: periodKey("day") }, periodSummary(periodOf(state, "day"))),
-      month: Object.assign({ key: periodKey("month") }, periodSummary(periodOf(state, "month"))) });
+      month: Object.assign({ key: periodKey("month"), top: compact(month.highscores) }, periodSummary(month)) });
 }
 /** A player's numbers for the chosen period, or null if they haven't rolled in it. */
 function playerPeriod(p, period) {
@@ -964,27 +966,57 @@ async function fetchBoard() {
   const { data, error } = await rpc("rng_board", { p_token: token });
   boardBusy = false;
   if (error) { if (!players.length) playersState = "error"; }
-  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username, crown: !!r.crown })); playersState = "ok"; }
+  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username, crown: !!r.crown, month_daily: Number(r.month_daily) || 0, month_days: Number(r.month_days) || 0 })); playersState = "ok"; }
   dirtyViews.add("ranking"); if (view === "ranking") renderRanking();
 }
 
 const SORTS = {
   best: { val: (p) => p.best_ep || 0, show: (p) => fmt(p.best_ep || 0), unit: (p) => p.best_tier || "", color: (p) => (p.best_tier ? cvar(p.best_tier) : "var(--fg)") },
   avg: { val: (p) => (p.rolls ? p.total_ep / p.rolls : 0), show: (p) => fmt(Math.floor(p.rolls ? p.total_ep / p.rolls : 0)), unit: () => "AVG EP", color: () => "var(--fg)" },
-  found: { val: (p) => p.found || 0, show: (p) => `${p.found || 0}/${TOTAL_BADGES}`, unit: () => "BADGES", color: () => "var(--accent)" },
+  daily: { val: (p) => p.month_daily || 0, show: (p) => fmt(p.month_daily || 0), unit: () => "DAILY BESTS", color: () => "var(--fg)" },
   rolls: { val: (p) => p.rolls || 0, show: (p) => fmt(p.rolls || 0), unit: () => "ROLLS", color: () => "var(--fg)" },
 };
 let rankSort = (() => { try { return localStorage.getItem("rngdle-pocket-rank") || "best"; } catch { return "best"; } })();
 if (!SORTS[rankSort]) rankSort = "best";
 let rankPeriod = (() => { try { return localStorage.getItem("rngdle-pocket-rank-period") || "day"; } catch { return "day"; } })();
 if (!["day", "month", "all"].includes(rankPeriod)) rankPeriod = "day";
-if (rankPeriod !== "all" && rankSort === "found") rankSort = "best";
+// Which rankings each period offers. "best" is one row per player today, and the top 25 single rolls for month / all-time.
+const PERIOD_SORTS = { day: ["best", "rolls"], month: ["best", "daily", "rolls"], all: ["best", "avg", "rolls"] };
+const RANK_NOTE = {
+  best: { day: "Each player's best roll today. Tap one to see it.", month: "The 25 best rolls this month. A player can appear more than once. Tap one to see it.",
+          all: "The 25 best rolls of all time. A player can appear more than once. Tap one to see it." },
+  daily: "Each player's best roll of every day this month, added up.",
+  avg: "Average EP per roll, all-time: the fairest luck comparison.",
+  rolls: "Number of rolls.",
+};
+function fixSort() { if (!PERIOD_SORTS[rankPeriod].includes(rankSort)) rankSort = "best"; }
+fixSort();
+const TOP_N = 25;
+/** The top single rolls across all players for the month or all-time (a player can appear several times). */
+function topRolls(period) {
+  const out = [];
+  for (const p of players) {
+    let list = period === "all" ? p.top_all : (p.month && p.month.key === periodKey("month") ? p.month.top : null);
+    if (!Array.isArray(list)) {                       // players on an older version of the page: only their single best is known
+      const q = playerPeriod(p, period);
+      list = q && q.best_number != null ? [{ n: q.best_number, ep: q.best_ep, t: q.best_tier, b: (q.best_top || [])[0], d: "" }] : [];
+    }
+    for (const r of list) out.push({ id: p.id, nick: p.nick, name: p.name, crown: p.crown, best_number: r.n, best_ep: r.ep, best_tier: r.t, best_top: r.b ? [r.b] : [], date: r.d || "" });
+  }
+  return out.sort((a, b) => b.best_ep - a.best_ep || (a.date < b.date ? -1 : a.date > b.date ? 1 : 0)).slice(0, TOP_N);
+}
 let rankToken = 0, rankList = [], rankNames = {};
 async function renderRanking() {
   dirtyViews.delete("ranking");
   const token = ++rankToken;
   for (const c of $("rank-period").children) c.setAttribute("aria-pressed", String(c.dataset.p === rankPeriod));
-  for (const c of $("rank-sort").children) { c.setAttribute("aria-pressed", String(c.dataset.s === rankSort)); if (c.dataset.s === "found") c.hidden = rankPeriod !== "all"; }
+  fixSort();
+  for (const c of $("rank-sort").children) {
+    c.setAttribute("aria-pressed", String(c.dataset.s === rankSort));
+    c.hidden = !PERIOD_SORTS[rankPeriod].includes(c.dataset.s);
+    if (c.dataset.s === "best") c.textContent = rankPeriod === "day" ? "Best roll" : "Top 25 rolls";
+  }
+  const note = RANK_NOTE[rankSort]; $("rank-note").textContent = typeof note === "string" ? note : note[rankPeriod];
   const inp = $("nick");
   if (document.activeElement !== inp) inp.value = nick;
   inp.placeholder = myName() || "Your name";
@@ -993,15 +1025,21 @@ async function renderRanking() {
   const msg = (t) => { box.innerHTML = `<div class="empty">${t}</div>`; rankList = []; };
   if (playersState === "error") return msg("Can't load the leaderboard right now. Try again later.");
   const sort = SORTS[rankSort];
-  const list = players.map((p) => { const q = playerPeriod(p, rankPeriod); return q && (q.rolls || 0) > 0 ? Object.assign({}, q, { id: p.id, nick: p.nick, name: p.name, found: p.found, crown: p.crown }) : null; })
-    .filter(Boolean).sort((a, b) => sort.val(b) - sort.val(a) || (b.best_ep || 0) - (a.best_ep || 0));
+  const rollMode = rankSort === "best" && rankPeriod !== "day";
+  const list = rollMode ? topRolls(rankPeriod) : players.map((p) => { const q = playerPeriod(p, rankPeriod); return q && (q.rolls || 0) > 0
+      ? Object.assign({}, q, { id: p.id, nick: p.nick, name: p.name, found: p.found, crown: p.crown, month_daily: p.month_daily, month_days: p.month_days }) : null; })
+    .filter(Boolean).filter((p) => rankSort !== "daily" || (p.month_daily || 0) > 0)
+    .sort((a, b) => sort.val(b) - sort.val(a) || (b.best_ep || 0) - (a.best_ep || 0));
   if (!list.length) return msg(playersState === "loading" ? "Loading leaderboard…" : playersState === "slow" ? "Can't reach the leaderboard yet, still trying…"
     : rankPeriod === "all" ? "No one has rolled yet. Roll once and you'll show up here." : `No one has rolled ${PERIOD_LABEL[rankPeriod]} yet.`);
   rankList = list;
   box.innerHTML = list.map((p, i) => {
     const medal = ["gold", "silver", "bronze"][i] || "";
     const em = p.best_top && p.best_top[0] && BY_ID[p.best_top[0]] ? [...new Intl.Segmenter().segment(BY_ID[p.best_top[0]].e)][0].segment : "🎲";
-    const sub = rankSort === "best" && p.best_number != null ? `best ${p.best_number}` : `${fmt(p.rolls || 0)} rolls · ${p.found || 0} badges`;
+    const sub = rollMode ? `${p.best_number}${p.date ? ` · ${shortDate(p.date)}` : ""}`
+      : rankSort === "best" && p.best_number != null ? `best ${p.best_number}`
+      : rankSort === "daily" ? `${p.month_days || 0} ${p.month_days === 1 ? "day" : "days"}`
+      : `${fmt(p.rolls || 0)} ${p.rolls === 1 ? "roll" : "rolls"} · ${p.found || 0} badges`;
     return `<button class="row prow${p.id === uid ? " me" : ""}" data-k="${i}"><span class="rk ${medal}">${i + 1}</span><span class="av" data-em="${em}">${em}</span>` +
       `<span class="nm"><b><span class="pn"></span>${p.crown ? `<span class="crown">👑</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b><small>${esc(sub)}</small></span>` +
       `<span class="val" style="color:${sort.color(p)}">${sort.show(p)}<small>${esc(sort.unit(p))}</small></span></button>`;
@@ -1196,7 +1234,7 @@ function renderScores() {
   for (const c of $("scores-period").children) c.setAttribute("aria-pressed", String(c.dataset.p === scoresPeriod));
   const hsList = periodOf(state, scoresPeriod).highscores;
   scoresShown = hsList;
-  if (!hsList.length) { box.innerHTML = `<div class="empty">${scoresPeriod === "all" ? "No rolls yet. Your 20 best rolls will show up here." : `No rolls ${PERIOD_LABEL[scoresPeriod]} yet.`}</div>`; return; }
+  if (!hsList.length) { box.innerHTML = `<div class="empty">${scoresPeriod === "all" ? "No rolls yet. Your 25 best rolls will show up here." : `No rolls ${PERIOD_LABEL[scoresPeriod]} yet.`}</div>`; return; }
   box.innerHTML = hsList.map((e, i) => {
     const best = e.top && e.top[0] && BY_ID[e.top[0]] ? BY_ID[e.top[0]].n : "";
     return `<button class="row" data-i="${i}" style="--rc:${cvar(e.tier)}"><span class="rk">${i + 1}</span><span class="ic">${topEmoji(e)}</span>` +
@@ -1262,7 +1300,7 @@ $("scores").addEventListener("click", (e) => {
 $("rank-period").addEventListener("click", (e) => {
   const c = e.target.closest("button[data-p]"); if (!c) return;
   rankPeriod = c.dataset.p; try { localStorage.setItem("rngdle-pocket-rank-period", rankPeriod); } catch {}
-  if (rankPeriod !== "all" && rankSort === "found") rankSort = "best";
+  fixSort();
   renderRanking();
 });
 $("scores-period").addEventListener("click", (e) => {
@@ -1277,7 +1315,10 @@ $("rank-sort").addEventListener("click", (e) => {
 $("ranking").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-k]"); if (!b) return;
   const p = rankList[+b.dataset.k];
-  if (p && p.best_number != null) showStatic(p.best_number, `${p.id === uid ? "Your" : `${rankNames[p.id] || "Player"}'s`} best roll ${PERIOD_LABEL[rankPeriod]}`);
+  if (!p || p.best_number == null) return;
+  const who = p.id === uid ? "You" : rankNames[p.id] || "Player";
+  showStatic(p.best_number, rankSort === "best" && rankPeriod !== "day" ? `#${+b.dataset.k + 1} ${PERIOD_LABEL[rankPeriod]} · ${who}${p.date ? ` · ${shortDate(p.date)}` : ""}`
+    : `${p.id === uid ? "Your" : `${who}'s`} best roll ${PERIOD_LABEL[rankPeriod]}`);
 });
 function saveNick() {
   nick = $("nick").value.replace(/\s+/g, " ").trim().slice(0, 20);

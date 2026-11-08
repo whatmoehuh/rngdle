@@ -316,6 +316,27 @@ begin
 end $$;
 revoke all on function public.rng_reset_all() from public, anon, authenticated;
 
+-- 9. Leaderboard: also send each player's sum of daily bests for the current month (German time).
+create or replace function public.rng_board(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare champ uuid; today date := (now() at time zone 'Europe/Berlin')::date;
+begin
+  if public.rng_session(p_token) is null then raise exception 'signed_out'; end if;
+  select account_id into champ from public.rng_daily
+   where day = today - 1
+   order by best_ep desc, reached_at asc limit 1;                  -- a tie goes to whoever got there first
+  return coalesce((
+    select json_agg(json_build_object('id', b.account_id, 'username', a.display, 'data', b.data,
+                                      'crown', b.account_id = champ,
+                                      'month_daily', coalesce(m.total, 0), 'month_days', coalesce(m.days, 0)))
+      from public.rng_board b
+      join public.rng_accounts a on a.id = b.account_id
+      left join (select account_id, sum(best_ep) as total, count(*) as days
+                   from public.rng_daily
+                  where day between date_trunc('month', today)::date and today
+                  group by account_id) m on m.account_id = b.account_id), '[]'::json);
+end $$;
+
 -- Owner tools (run by hand in the SQL Editor when needed):
 --   delete all scores (keeps accounts):  select public.rng_reset_all();
 --   reset a password:  update public.rng_accounts set pw_hash = extensions.crypt('newpass123', extensions.gen_salt('bf', 10)) where username = 'name';
