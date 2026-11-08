@@ -206,6 +206,7 @@ textarea { width: 100%; min-height: 90px; background: var(--card); color: var(--
 .prow.me { background: color-mix(in srgb, var(--accent) 9%, transparent); }
 .prow .you { font-family: var(--f-body); font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--accent-ink); background: var(--accent);
   border-radius: 8px; padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
+.prow .crown { margin-left: 6px; font-size: 15px; }
 .prow .rk.gold { color: var(--mythic); font-weight: 800; }
 .prow .rk.silver { color: var(--common); font-weight: 800; }
 .prow .rk.bronze { color: var(--trash); font-weight: 800; }
@@ -963,7 +964,9 @@ async function fetchBoard() {
   const { data, error } = await rpc("rng_board", { p_token: token });
   boardBusy = false;
   if (error) { if (!players.length) playersState = "error"; }
-  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username })); playersState = "ok"; }
+  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username, crown: !!r.crown })); playersState = "ok"; }
+  const champ = players.find((p) => p.crown);
+  $("rank-sub").textContent = champ ? `👑 ${champ.nick || champ.name} had yesterday's best roll` : "Everyone who plays";
   dirtyViews.add("ranking"); if (view === "ranking") renderRanking();
 }
 
@@ -992,7 +995,7 @@ async function renderRanking() {
   const msg = (t) => { box.innerHTML = `<div class="empty">${t}</div>`; rankList = []; };
   if (playersState === "error") return msg("Can't load the leaderboard right now. Try again later.");
   const sort = SORTS[rankSort];
-  const list = players.map((p) => { const q = playerPeriod(p, rankPeriod); return q && (q.rolls || 0) > 0 ? Object.assign({}, q, { id: p.id, nick: p.nick, name: p.name, found: p.found }) : null; })
+  const list = players.map((p) => { const q = playerPeriod(p, rankPeriod); return q && (q.rolls || 0) > 0 ? Object.assign({}, q, { id: p.id, nick: p.nick, name: p.name, found: p.found, crown: p.crown }) : null; })
     .filter(Boolean).sort((a, b) => sort.val(b) - sort.val(a) || (b.best_ep || 0) - (a.best_ep || 0));
   if (!list.length) return msg(playersState === "loading" ? "Loading leaderboard…" : playersState === "slow" ? "Can't reach the leaderboard yet, still trying…"
     : rankPeriod === "all" ? "No one has rolled yet. Roll once and you'll show up here." : `No one has rolled ${PERIOD_LABEL[rankPeriod]} yet.`);
@@ -1002,7 +1005,7 @@ async function renderRanking() {
     const em = p.best_top && p.best_top[0] && BY_ID[p.best_top[0]] ? [...new Intl.Segmenter().segment(BY_ID[p.best_top[0]].e)][0].segment : "🎲";
     const sub = rankSort === "best" && p.best_number != null ? `best ${p.best_number}` : `${fmt(p.rolls || 0)} rolls · ${p.found || 0} badges`;
     return `<button class="row prow${p.id === uid ? " me" : ""}" data-k="${i}"><span class="rk ${medal}">${i + 1}</span><span class="av" data-em="${em}">${em}</span>` +
-      `<span class="nm"><b><span class="pn"></span>${p.id === uid ? `<span class="you">YOU</span>` : ""}</b><small>${esc(sub)}</small></span>` +
+      `<span class="nm"><b><span class="pn"></span>${p.crown ? `<span class="crown" title="Best roll yesterday" aria-label="Best roll yesterday">👑</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b><small>${esc(sub)}</small></span>` +
       `<span class="val" style="color:${sort.color(p)}">${sort.show(p)}<small>${esc(sort.unit(p))}</small></span></button>`;
   }).join("");
   const rows = box.querySelectorAll(".prow");
