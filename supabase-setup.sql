@@ -156,6 +156,56 @@ end $$;
 revoke all on function public.rng_roll(text) from public;
 grant execute on function public.rng_roll(text) to anon, authenticated;
 
+-- 6. Seasons: lets the owner wipe all scores. Saves from an older season are refused, so phones can't upload old progress again.
+create table if not exists public.rng_meta (
+  id     boolean primary key default true check (id),
+  season int not null default 1
+);
+insert into public.rng_meta (id) values (true) on conflict (id) do nothing;
+alter table public.rng_meta enable row level security;
+revoke all on public.rng_meta from anon, authenticated;
+
+create or replace function public.rng_load(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  return json_build_object('id', a, 'username', (select display from public.rng_accounts where id = a),
+                           'save', (select data from public.rng_saves where account_id = a),
+                           'season', (select season from public.rng_meta),
+                           'wait_ms', (select greatest(0, ceil(extract(epoch from next_roll_at - now()) * 1000)) from public.rng_accounts where id = a));
+end $$;
+
+drop function if exists public.rng_save(text, jsonb, jsonb);
+create or replace function public.rng_save(p_token text, p_save jsonb, p_board jsonb, p_season int) returns void
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if p_season is distinct from (select season from public.rng_meta) then raise exception 'new_season'; end if;
+  if p_save is null or pg_column_size(p_save) > 300000 or pg_column_size(p_board) > 20000 then raise exception 'too_big'; end if;
+  insert into public.rng_saves (account_id, data, updated_at) values (a, p_save, now())
+    on conflict (account_id) do update set data = excluded.data, updated_at = now();
+  if p_board is not null then
+    insert into public.rng_board (account_id, data, updated_at) values (a, p_board, now())
+      on conflict (account_id) do update set data = excluded.data, updated_at = now();
+  end if;
+end $$;
+revoke all on function public.rng_save(text, jsonb, jsonb, int) from public;
+grant execute on function public.rng_save(text, jsonb, jsonb, int) to anon, authenticated;
+
+-- Owner only (run in the SQL Editor): wipes every save and the leaderboard, keeps all accounts.
+create or replace function public.rng_reset_all() returns text
+  language plpgsql security definer set search_path = public as $$
+begin
+  update public.rng_meta set season = season + 1;
+  delete from public.rng_saves where true;
+  delete from public.rng_board where true;
+  return 'All scores deleted. New season: ' || (select season from public.rng_meta);
+end $$;
+revoke all on function public.rng_reset_all() from public, anon, authenticated;
+
 -- Owner tools (run by hand in the SQL Editor when needed):
+--   delete all scores (keeps accounts):  select public.rng_reset_all();
 --   reset a password:  update public.rng_accounts set pw_hash = extensions.crypt('newpass123', extensions.gen_salt('bf', 10)) where username = 'name';
 --   delete a player:   delete from public.rng_accounts where username = 'name';

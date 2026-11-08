@@ -816,7 +816,7 @@ function lsSet(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch
 function lsDel(k) { try { localStorage.removeItem(k); } catch {} }
 let lsKey = null;
 function lsSave() { if (lsKey) lsSet(lsKey, state); }
-let uid = null, token = null, username = "", ready = false;
+let uid = null, token = null, username = "", ready = false, season = 1;
 let remoteReady = false, writing = false, dirty = false, saveTimer = null, syncState = "loading", nick = "";
 const SYNC_TEXT = { loading: "Loading your save…", synced: "Saved online", pending: "Saving…", saving: "Saving…",
   error: "Couldn't save online, kept on this phone. Retrying", unreachable: "Can't reach the server, retrying" };
@@ -856,7 +856,9 @@ async function signIn(fn) {
   if (error) { gateMsg(errText(error)); return; }
   gateMsg(""); $("password").value = "";
   token = data.token; lsSet(TOKEN_KEY, token);
-  afterLogin(data);
+  const full = await rpc("rng_load", { p_token: token });           // season + cooldown come with the full load
+  if (full.error) { showGate("err"); return; }
+  afterLogin(full.data);
 }
 $("f-login").addEventListener("submit", (e) => { e.preventDefault(); signIn("rng_login"); });
 $("b-signup").addEventListener("click", () => signIn("rng_register"));
@@ -878,7 +880,8 @@ async function connect() {
 }
 function afterLogin(data) {
   uid = data.id; username = data.username || "";
-  lsKey = LS_KEY + ":" + uid;
+  season = Number(data.season) || 1;
+  lsKey = `${LS_KEY}:${uid}:s${season}`;                  // a new season ignores this phone's older saves
   state = normalize(lsGet(lsKey));
   nick = String(lsGet(nickKey()) || "");
   $("me-name").textContent = username;
@@ -921,9 +924,10 @@ async function flush(keepalive = false) {
   clearTimeout(saveTimer); saveTimer = null;
   if (!uid || !remoteReady || writing || !dirty) return;
   writing = true; dirty = false; setSync("saving");
-  const { error } = await rpc("rng_save", { p_token: token, p_save: clone(state), p_board: summary() }, keepalive);
+  const { error } = await rpc("rng_save", { p_token: token, p_save: clone(state), p_board: summary(), p_season: season }, keepalive);
   writing = false;
   if (error && error.code === "signed_out") { lsDel(TOKEN_KEY); location.reload(); return; }
+  if (error && error.code === "new_season") { lsDel(lsKey); location.reload(); return; }   // scores were reset: start fresh
   if (error) { dirty = true; setSync("error"); saveTimer = setTimeout(flush, 5000 + Math.random() * 5000); return; }
   setSync(dirty ? "pending" : "synced");
   if (dirty) saveTimer = setTimeout(flush, 2000);
