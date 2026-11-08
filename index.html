@@ -893,8 +893,9 @@ function afterLogin(data) {
   else setSync("synced");
   setCooldown(data.wait_ms);
   ready = true; renderChrome(); updateButton(); markDirtyViews();
-  fetchBoard();
-  setInterval(() => { if (document.visibilityState === "visible") fetchBoard(); }, 20000);
+  // The leaderboard only loads while the Ranking tab is open (keeps traffic low on the free plan).
+  if (view === "ranking") fetchBoard();
+  setInterval(() => { if (document.visibilityState === "visible" && view === "ranking") fetchBoard(); }, 20000);
 }
 
 /* ---------- rolls come from the server, with a cooldown ---------- */
@@ -934,7 +935,7 @@ async function flush(keepalive = false) {
   if (view === "ranking") fetchBoard();
 }
 const pushPlayer = () => { if (!uid) return; dirty = true; flush(); };
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { lsSave(); flush(true); } else if (ready) fetchBoard(); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { lsSave(); flush(true); } else if (ready && view === "ranking") fetchBoard(); });
 window.addEventListener("pagehide", () => { lsSave(); flush(true); });
 
 /* ---------- leaderboard ---------- */
@@ -1181,6 +1182,7 @@ function setView(v) {
   $("rollbar").hidden = v !== "roll";
   if (location.hash !== "#" + v) history.replaceState(null, "", "#" + v);
   if (dirtyViews.has(v)) renderView(v);
+  if (v === "ranking" && ready) fetchBoard();
 }
 function renderView(v) {
   dirtyViews.delete(v);
