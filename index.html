@@ -216,6 +216,18 @@ textarea { width: 100%; min-height: 90px; background: var(--card); color: var(--
   background: linear-gradient(color-mix(in srgb, var(--mythic) 14%, var(--card)), color-mix(in srgb, var(--mythic) 14%, var(--card))) padding-box,
     linear-gradient(135deg, var(--mythic), var(--anomaly)) border-box;
   box-shadow: 0 0 16px -4px color-mix(in srgb, var(--mythic) 65%, transparent); }
+#rank-sort { --wine: #e0346e; --wine-hi: #ff8fb4; --wine-lo: #7d0f35; }
+#rank-sort[data-p="all"] .chip[data-s="best"] { color: var(--wine-hi); border: 1.5px solid transparent;
+  background: linear-gradient(var(--panel), var(--panel)) padding-box,
+    linear-gradient(120deg, var(--wine-hi), var(--wine), var(--wine-lo), var(--wine), var(--wine-hi)) border-box;
+  background-size: auto, 300% 100%; animation: wine-shift 5s ease-in-out infinite alternate; }
+#rank-sort[data-p="all"] .chip[data-s="best"][aria-pressed="true"] { color: var(--fg);
+  background: linear-gradient(color-mix(in srgb, var(--wine) 18%, var(--card)), color-mix(in srgb, var(--wine) 18%, var(--card))) padding-box,
+    linear-gradient(120deg, var(--wine-hi), var(--wine), var(--wine-lo), var(--wine), var(--wine-hi)) border-box;
+  background-size: auto, 300% 100%; box-shadow: 0 0 18px -3px color-mix(in srgb, var(--wine) 70%, transparent); }
+@keyframes wine-shift { from { background-position: 0 0, 0% 50%; } to { background-position: 0 0, 100% 50%; } }
+#ranking.alltop { border-color: color-mix(in srgb, #e0346e 60%, var(--line)); box-shadow: 0 0 32px -10px color-mix(in srgb, #e0346e 80%, transparent); }
+@media (prefers-reduced-motion: reduce) { #rank-sort[data-p="all"] .chip[data-s="best"] { animation: none; } }
 #ranking.daily { border-color: color-mix(in srgb, var(--mythic) 50%, var(--line)); box-shadow: 0 0 26px -12px color-mix(in srgb, var(--mythic) 80%, transparent); }
 
 @media (prefers-reduced-motion: reduce) { .cardb.pop { animation: none; } .bar > i { transition: none; } }
@@ -1044,6 +1056,8 @@ async function renderRanking() {
   inp.disabled = $("b-nick").disabled = !ready;
   const box = $("ranking");
   box.classList.toggle("daily", rankSort === "daily");
+  box.classList.toggle("alltop", rankSort === "best" && rankPeriod === "all");
+  $("rank-sort").dataset.p = rankPeriod;
   const msg = (t) => { box.innerHTML = `<div class="empty">${t}</div>`; rankList = []; };
   if (playersState === "error") return msg("Can't load the leaderboard right now. Try again later.");
   const sort = SORTS[rankSort];
