@@ -356,7 +356,7 @@ img { max-width: 100%; }
   </div>
 </div>
 
-<div class="rollbar" id="rollbar"><button class="rollbtn" id="rollbtn">ROLL</button></div>
+<div class="rollbar" id="rollbar"><p class="note" id="roll-msg" hidden style="text-align:center;margin:0 0 8px"></p><button class="rollbtn" id="rollbtn">ROLL</button></div>
 
 <script src="config.js"></script>
 <script>
@@ -888,9 +888,26 @@ function afterLogin(data) {
   if (remote && remote.rolls >= state.rolls) { state = remote; lsSave(); setSync("synced"); }
   else if (state.rolls > 0) { dirty = true; flush(); }                    // this phone has newer rolls
   else setSync("synced");
+  setCooldown(data.wait_ms);
   ready = true; renderChrome(); updateButton(); markDirtyViews();
   fetchBoard();
   setInterval(() => { if (document.visibilityState === "visible") fetchBoard(); }, 20000);
+}
+
+/* ---------- rolls come from the server, with a cooldown ---------- */
+let cooldownUntil = 0, rollBusy = false, rollMsgTimer = null;
+const cooldownLeft = () => Math.max(0, cooldownUntil - Date.now());
+function setCooldown(ms) { cooldownUntil = Date.now() + Math.max(0, Number(ms) || 0); updateButton(); }
+setInterval(() => { if (ready && (cooldownLeft() > 0 || $("rollbtn").dataset.cd)) updateButton(); }, 250);
+async function serverRoll() {
+  const { data, error } = await rpc("rng_roll", { p_token: token });
+  if (error && error.code === "signed_out") { lsDel(TOKEN_KEY); location.reload(); return { error }; }
+  if (error) return { error };
+  return data.ok ? { number: data.number, next: data.wait_ms } : { wait: data.wait_ms };
+}
+function rollMsg(t) {
+  const el = $("roll-msg"); el.textContent = t; el.hidden = !t;
+  clearTimeout(rollMsgTimer); if (t) rollMsgTimer = setTimeout(() => { el.hidden = true; }, 5000);
 }
 
 /* ---------- own save + leaderboard row (one request) ---------- */
@@ -1000,12 +1017,19 @@ async function renderRanking() {
 let phase = "idle";            // idle | spinning | revealing | done
 let job = null, pending = 0, result = null, shown = 0;
 const rnd = (k) => Array.from({ length: k }, () => Math.floor(Math.random() * 10));
-function rollNumber() { const a = new Uint32Array(1); crypto.getRandomValues(a); return a[0] % (RNG.MAX_ROLL + 1); }
+
 // (2^32 mod 1,000,001 bias is below 0.03 %; same order as Python's randint behaviour is irrelevant here)
 
-function onRoll() {
-  if (!ready || phase === "spinning" || phase === "revealing") return;   // rolls can't be skipped
-  pending = rollNumber();
+async function onRoll() {
+  if (!ready || phase === "spinning" || phase === "revealing" || rollBusy || cooldownLeft() > 0) return;   // rolls can't be skipped
+  rollBusy = true; updateButton();
+  const r = await serverRoll();
+  rollBusy = false;
+  if (r.wait != null) { setCooldown(r.wait); return; }
+  if (r.error) { updateButton(); rollMsg(r.error.code === "network" || r.error.status >= 500 ? "Can't reach the server. Try again in a moment." : "That roll didn't go through. Try again."); return; }
+  rollMsg("");
+  setCooldown(r.next);
+  pending = r.number;
   window.scrollTo({ top: 0, behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
   // Score and save immediately, so closing the app mid-animation can't undo a roll.
   const { rows, total } = RNG.evaluate(pending);
@@ -1119,6 +1143,12 @@ function appendCard(r, animate) {
 function updateButton() {
   const btn = $("rollbtn");
   if (!ready) { btn.textContent = "LOADING…"; btn.classList.add("busy"); return; }
+  const idle = phase === "idle" || phase === "done", wait = cooldownLeft();
+  if (idle && (rollBusy || wait > 0)) {
+    btn.textContent = rollBusy ? "ROLLING…" : `NEXT ROLL IN ${Math.ceil(wait / 1000)}s`;
+    btn.classList.add("busy"); btn.dataset.cd = "1"; return;
+  }
+  delete btn.dataset.cd;
   btn.textContent = { idle: "ROLL", spinning: "ROLLING…", revealing: "ROLLING…", done: "ROLL AGAIN" }[phase];
   btn.classList.toggle("busy", phase === "spinning" || phase === "revealing");
 }

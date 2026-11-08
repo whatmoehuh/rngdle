@@ -124,6 +124,38 @@ revoke all on function public.rng_register(text, text), public.rng_login(text, t
 grant execute on function public.rng_register(text, text), public.rng_login(text, text), public.rng_load(text),
   public.rng_save(text, jsonb, jsonb), public.rng_board(text), public.rng_logout(text) to anon, authenticated;
 
+-- 5. Server-side rolls with a cooldown: numbers come from the database, at most one roll per 10 seconds per account.
+alter table public.rng_accounts add column if not exists next_roll_at timestamptz not null default now();
+
+create or replace function public.rng_roll(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); nxt timestamptz;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  update public.rng_accounts set next_roll_at = now() + interval '10 seconds'     -- ← the cooldown
+   where id = a and next_roll_at <= now()
+  returning next_roll_at into nxt;
+  if not found then
+    select next_roll_at into nxt from public.rng_accounts where id = a;
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
+  end if;
+  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int,
+                           'wait_ms', ceil(extract(epoch from nxt - now()) * 1000));
+end $$;
+
+create or replace function public.rng_load(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  return json_build_object('id', a, 'username', (select display from public.rng_accounts where id = a),
+                           'save', (select data from public.rng_saves where account_id = a),
+                           'wait_ms', (select greatest(0, ceil(extract(epoch from next_roll_at - now()) * 1000)) from public.rng_accounts where id = a));
+end $$;
+
+revoke all on function public.rng_roll(text) from public;
+grant execute on function public.rng_roll(text) to anon, authenticated;
+
 -- Owner tools (run by hand in the SQL Editor when needed):
 --   reset a password:  update public.rng_accounts set pw_hash = extensions.crypt('newpass123', extensions.gen_salt('bf', 10)) where username = 'name';
 --   delete a player:   delete from public.rng_accounts where username = 'name';
