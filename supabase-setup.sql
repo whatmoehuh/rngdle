@@ -343,11 +343,10 @@ end $$;
 --   delete a player:   delete from public.rng_accounts where username = 'name';
 
 -- ============================================================
--- RNGdle v1.0.2: server-wide highscore places for the line under a roll.
--- Where would a roll worth p_ep land in everyone's top-25 lists (all-time, this month, today)?
--- Rank = 1 + number of saved rolls worth at least as much (an earlier roll wins a tie).
--- Players on an older page version only have their single best roll in the board, so that one counts.
--- Safe to run more than once.
+-- RNGdle v1.0.2–v1.0.4 database changes in one go (safe to run more than once).
+-- Written without "select … into" because the Supabase SQL editor mistakes that for creating a table.
+
+-- v1.0.2: server-wide highscore places
 create or replace function public.rng_rank(p_token text, p_ep bigint) returns json
   language plpgsql security definer set search_path = public, extensions as $$
 declare
@@ -356,63 +355,27 @@ declare
   r_all int; r_month int; r_day int;
 begin
   if public.rng_session(p_token) is null then raise exception 'signed_out'; end if;
-
-  select 1 + count(*) into r_all
+  r_all := (select 1 + count(*)
     from public.rng_board b,
          jsonb_array_elements(case when jsonb_typeof(b.data -> 'top_all') = 'array' then b.data -> 'top_all'
                                    else jsonb_build_array(jsonb_build_object('ep', b.data -> 'best_ep')) end) e
-   where (e ->> 'ep')::bigint >= p_ep;
-
-  select 1 + count(*) into r_month
+   where (e ->> 'ep')::bigint >= p_ep);
+  r_month := (select 1 + count(*)
     from public.rng_board b,
          jsonb_array_elements(case when jsonb_typeof(b.data -> 'month' -> 'top') = 'array' then b.data -> 'month' -> 'top'
                                    else jsonb_build_array(jsonb_build_object('ep', b.data -> 'month' -> 'best_ep')) end) e
-   where b.data -> 'month' ->> 'key' = mk and (e ->> 'ep')::bigint >= p_ep;
-
-  select 1 + count(*) into r_day
+   where b.data -> 'month' ->> 'key' = mk and (e ->> 'ep')::bigint >= p_ep);
+  r_day := (select 1 + count(*)
     from public.rng_board b,
          jsonb_array_elements(case when jsonb_typeof(b.data -> 'day' -> 'top') = 'array' then b.data -> 'day' -> 'top'
                                    else jsonb_build_array(jsonb_build_object('ep', b.data -> 'day' -> 'best_ep')) end) e
-   where b.data -> 'day' ->> 'key' = dk and (e ->> 'ep')::bigint >= p_ep;
-
+   where b.data -> 'day' ->> 'key' = dk and (e ->> 'ep')::bigint >= p_ep);
   return json_build_object('all', r_all, 'month', r_month, 'day', r_day);
 end $$;
 revoke all on function public.rng_rank(text, bigint) from public;
 grant execute on function public.rng_rank(text, bigint) to anon, authenticated;
 
--- ============================================================
--- RNGdle v1.0.3: two crowns for a winning streak.
--- Yesterday's best roller gets one crown; if they also won the day before, they get two.
--- Lose a day and the next day there are none. Safe to run more than once.
-create or replace function public.rng_board(p_token text) returns json
-  language plpgsql security definer set search_path = public, extensions as $$
-declare champ uuid; champ2 uuid; today date := (now() at time zone 'Europe/Berlin')::date;
-begin
-  if public.rng_session(p_token) is null then raise exception 'signed_out'; end if;
-  select account_id into champ from public.rng_daily
-   where day = today - 1
-   order by best_ep desc, reached_at asc limit 1;                  -- a tie goes to whoever got there first
-  select account_id into champ2 from public.rng_daily
-   where day = today - 2
-   order by best_ep desc, reached_at asc limit 1;
-  return coalesce((
-    select json_agg(json_build_object('id', b.account_id, 'username', a.display, 'data', b.data,
-                                      'crown', b.account_id = champ,
-                                      'crowns', case when b.account_id = champ and b.account_id = champ2 then 2
-                                                     when b.account_id = champ then 1 else 0 end,
-                                      'month_daily', coalesce(m.total, 0), 'month_days', coalesce(m.days, 0)))
-      from public.rng_board b
-      join public.rng_accounts a on a.id = b.account_id
-      left join (select account_id, sum(best_ep) as total, count(*) as days
-                   from public.rng_daily
-                  where day between date_trunc('month', today)::date and today
-                  group by account_id) m on m.account_id = b.account_id), '[]'::json);
-end $$;
-
--- ============================================================
--- RNGdle v1.0.4: green "online" dot in the Rolls rankings.
--- An open, visible page checks in every 30 s (rng_ping); when it's hidden or closed it says goodbye.
--- rng_board reports online = checked in during the last 70 s. Safe to run more than once.
+-- v1.0.4: online dot
 alter table public.rng_accounts add column if not exists last_seen timestamptz;
 
 create or replace function public.rng_ping(p_token text, p_here boolean default true) returns void
@@ -425,17 +388,19 @@ end $$;
 revoke all on function public.rng_ping(text, boolean) from public;
 grant execute on function public.rng_ping(text, boolean) to anon, authenticated;
 
+-- v1.0.3 + v1.0.4: leaderboard with streak crowns (0/1/2) and online flag
 create or replace function public.rng_board(p_token text) returns json
   language plpgsql security definer set search_path = public, extensions as $$
-declare champ uuid; champ2 uuid; today date := (now() at time zone 'Europe/Berlin')::date;
+declare
+  today date := (now() at time zone 'Europe/Berlin')::date;
+  champ uuid;
+  champ2 uuid;
 begin
   if public.rng_session(p_token) is null then raise exception 'signed_out'; end if;
-  select account_id into champ from public.rng_daily
-   where day = today - 1
-   order by best_ep desc, reached_at asc limit 1;                  -- a tie goes to whoever got there first
-  select account_id into champ2 from public.rng_daily
-   where day = today - 2
-   order by best_ep desc, reached_at asc limit 1;
+  champ := (select account_id from public.rng_daily where day = today - 1
+             order by best_ep desc, reached_at asc limit 1);          -- a tie goes to whoever got there first
+  champ2 := (select account_id from public.rng_daily where day = today - 2
+              order by best_ep desc, reached_at asc limit 1);
   return coalesce((
     select json_agg(json_build_object('id', b.account_id, 'username', a.display, 'data', b.data,
                                       'crown', b.account_id = champ,
