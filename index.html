@@ -1090,7 +1090,7 @@ async function fetchBoard() {
   const { data, error } = await rpc("rng_board", { p_token: token });
   boardBusy = false;
   if (error) { if (!players.length) playersState = "error"; }
-  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username, crown: !!r.crown })); playersState = "ok"; }
+  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username, crown: Math.min(2, Number(r.crowns ?? (r.crown ? 1 : 0)) || 0) })); playersState = "ok"; }
   dirtyViews.add("ranking"); if (view === "ranking") renderRanking();
 }
 
@@ -1171,7 +1171,7 @@ async function renderRanking() {
       : rankSort === "daily" ? ""
       : `${fmt(p.rolls || 0)} ${p.rolls === 1 ? "roll" : "rolls"} · ${p.found || 0} badges`;
     return `<button class="row prow${p.id === uid ? " me" : ""}" data-k="${i}"><span class="rk ${medal}">${i + 1}</span><span class="av" data-em="${em}">${em}</span>` +
-      `<span class="nm"><b><span class="pn"></span>${p.crown ? `<span class="crown">👑</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>` +
+      `<span class="nm"><b><span class="pn"></span>${p.crown ? `<span class="crown">${"👑".repeat(p.crown)}</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>` +
       `<span class="val" style="color:${sort.color(p)}">${sort.show(p)}<small>${esc(sort.unit(p))}</small></span></button>`;
   }).join("");
   const rows = box.querySelectorAll(".prow");
@@ -1528,7 +1528,8 @@ function renderPatch() {
     `<div class="pn-sec"><h4>+${PATCH.badges.length} new badges</h4><div class="pn-chips">${chips}</div></div>` +
     `<div class="pn-sec"><h4>Rules</h4><ul class="pn-list">${rules}</ul></div>` +
     `<div class="pn-sec"><h4>Tier cut-offs updated</h4><div class="pn-cut">${cuts}</div></div>` +
-    `<p class="note" style="margin:0">Rolls from before keep their score.</p>`;
+    `<p class="note" style="margin:0">Rolls from before keep their score.</p>` +
+    `<p class="note" style="margin:0">Side note: high-score notifications were updated.</p>`;
 }
 let patchReturn = null;
 function openPatch() {

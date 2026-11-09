@@ -379,3 +379,32 @@ begin
 end $$;
 revoke all on function public.rng_rank(text, bigint) from public;
 grant execute on function public.rng_rank(text, bigint) to anon, authenticated;
+
+-- ============================================================
+-- RNGdle v1.0.3: two crowns for a winning streak.
+-- Yesterday's best roller gets one crown; if they also won the day before, they get two.
+-- Lose a day and the next day there are none. Safe to run more than once.
+create or replace function public.rng_board(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare champ uuid; champ2 uuid; today date := (now() at time zone 'Europe/Berlin')::date;
+begin
+  if public.rng_session(p_token) is null then raise exception 'signed_out'; end if;
+  select account_id into champ from public.rng_daily
+   where day = today - 1
+   order by best_ep desc, reached_at asc limit 1;                  -- a tie goes to whoever got there first
+  select account_id into champ2 from public.rng_daily
+   where day = today - 2
+   order by best_ep desc, reached_at asc limit 1;
+  return coalesce((
+    select json_agg(json_build_object('id', b.account_id, 'username', a.display, 'data', b.data,
+                                      'crown', b.account_id = champ,
+                                      'crowns', case when b.account_id = champ and b.account_id = champ2 then 2
+                                                     when b.account_id = champ then 1 else 0 end,
+                                      'month_daily', coalesce(m.total, 0), 'month_days', coalesce(m.days, 0)))
+      from public.rng_board b
+      join public.rng_accounts a on a.id = b.account_id
+      left join (select account_id, sum(best_ep) as total, count(*) as days
+                   from public.rng_daily
+                  where day between date_trunc('month', today)::date and today
+                  group by account_id) m on m.account_id = b.account_id), '[]'::json);
+end $$;
