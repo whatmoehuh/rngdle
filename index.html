@@ -238,6 +238,8 @@ html.sheet-open { overflow: hidden; }
 .prow .you { font-family: var(--f-body); font-size: 10px; font-weight: 700; letter-spacing: .08em; color: var(--accent-ink); background: var(--accent);
   border-radius: 8px; padding: 1px 6px; margin-left: 6px; vertical-align: 2px; }
 .prow .crown { margin-left: 6px; font-size: 15px; }
+.prow .online { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-left: 7px; vertical-align: 2px;
+  background: var(--uncommon); box-shadow: 0 0 0 2px color-mix(in srgb, var(--uncommon) 25%, transparent), 0 0 8px color-mix(in srgb, var(--uncommon) 70%, transparent); }
 .prow .rk.gold { color: var(--mythic); font-weight: 800; }
 .prow .rk.silver { color: var(--common); font-weight: 800; }
 .prow .rk.bronze { color: var(--trash); font-weight: 800; }
@@ -1020,6 +1022,8 @@ function afterLogin(data) {
   // The leaderboard only loads while the Ranking tab is open (keeps traffic low on the free plan).
   if (view === "ranking") fetchBoard();
   setInterval(() => { if (document.visibilityState === "visible" && view === "ranking") fetchBoard(); }, 20000);
+  ping(true);
+  setInterval(() => { if (document.visibilityState === "visible") ping(true); }, 30000);
 }
 
 /* ---------- rolls come from the server, with a cooldown ---------- */
@@ -1059,8 +1063,13 @@ async function flush(keepalive = false) {
   if (view === "ranking") fetchBoard();
 }
 const pushPlayer = () => { if (!uid) return; dirty = true; flush(); };
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") { lsSave(); flush(true); } else if (ready && view === "ranking") fetchBoard(); });
-window.addEventListener("pagehide", () => { lsSave(); flush(true); });
+/** "I have the page open" (or, with here = false, "I left") — drives the green dot in the Rolls rankings. */
+function ping(here, keepalive = false) { if (token && uid) rpc("rng_ping", { p_token: token, p_here: here }, keepalive); }
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") { lsSave(); flush(true); ping(false, true); }
+  else if (ready) { ping(true); if (view === "ranking") fetchBoard(); }
+});
+window.addEventListener("pagehide", () => { lsSave(); flush(true); ping(false, true); });
 
 /* ---------- leaderboard ---------- */
 let lastPlayer = "";
@@ -1090,7 +1099,7 @@ async function fetchBoard() {
   const { data, error } = await rpc("rng_board", { p_token: token });
   boardBusy = false;
   if (error) { if (!players.length) playersState = "error"; }
-  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username, crown: Math.min(2, Number(r.crowns ?? (r.crown ? 1 : 0)) || 0) })); playersState = "ok"; }
+  else { players = (data || []).map((r) => Object.assign({}, r.data, { id: r.id, name: r.username, crown: Math.min(2, Number(r.crowns ?? (r.crown ? 1 : 0)) || 0), online: !!r.online })); playersState = "ok"; }
   dirtyViews.add("ranking"); if (view === "ranking") renderRanking();
 }
 
@@ -1157,7 +1166,7 @@ async function renderRanking() {
   const sort = SORTS[rankSort];
   const rollMode = rankSort === "top" || (rankSort === "best" && rankPeriod !== "day");
   const list = rollMode ? topRolls(rankPeriod) : players.map((p) => { const q = playerPeriod(p, rankPeriod); return q && (q.rolls || 0) > 0
-      ? Object.assign({}, q, { id: p.id, nick: p.nick, name: p.name, found: p.found, crown: p.crown }) : null; })
+      ? Object.assign({}, q, { id: p.id, nick: p.nick, name: p.name, found: p.found, crown: p.crown, online: p.online }) : null; })
     .filter(Boolean).filter((p) => rankSort !== "daily" || sort.val(p) > 0)
     .sort((a, b) => sort.val(b) - sort.val(a) || (b.best_ep || 0) - (a.best_ep || 0));
   if (!list.length) return msg(playersState === "loading" ? "Loading leaderboard…" : playersState === "slow" ? "Can't reach the leaderboard yet, still trying…"
@@ -1171,7 +1180,7 @@ async function renderRanking() {
       : rankSort === "daily" ? ""
       : `${fmt(p.rolls || 0)} ${p.rolls === 1 ? "roll" : "rolls"} · ${p.found || 0} badges`;
     return `<button class="row prow${p.id === uid ? " me" : ""}" data-k="${i}"><span class="rk ${medal}">${i + 1}</span><span class="av" data-em="${em}">${em}</span>` +
-      `<span class="nm"><b><span class="pn"></span>${p.crown ? `<span class="crown">${"👑".repeat(p.crown)}</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>` +
+      `<span class="nm"><b><span class="pn"></span>${rankSort === "rolls" && p.online ? `<i class="online" role="img" aria-label="online"></i>` : ""}${p.crown ? `<span class="crown">${"👑".repeat(p.crown)}</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>` +
       `<span class="val" style="color:${sort.color(p)}">${sort.show(p)}<small>${esc(sort.unit(p))}</small></span></button>`;
   }).join("");
   const rows = box.querySelectorAll(".prow");

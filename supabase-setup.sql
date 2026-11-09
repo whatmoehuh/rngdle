@@ -408,3 +408,45 @@ begin
                   where day between date_trunc('month', today)::date and today
                   group by account_id) m on m.account_id = b.account_id), '[]'::json);
 end $$;
+
+-- ============================================================
+-- RNGdle v1.0.4: green "online" dot in the Rolls rankings.
+-- An open, visible page checks in every 30 s (rng_ping); when it's hidden or closed it says goodbye.
+-- rng_board reports online = checked in during the last 70 s. Safe to run more than once.
+alter table public.rng_accounts add column if not exists last_seen timestamptz;
+
+create or replace function public.rng_ping(p_token text, p_here boolean default true) returns void
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  update public.rng_accounts set last_seen = case when p_here then now() else null end where id = a;
+end $$;
+revoke all on function public.rng_ping(text, boolean) from public;
+grant execute on function public.rng_ping(text, boolean) to anon, authenticated;
+
+create or replace function public.rng_board(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare champ uuid; champ2 uuid; today date := (now() at time zone 'Europe/Berlin')::date;
+begin
+  if public.rng_session(p_token) is null then raise exception 'signed_out'; end if;
+  select account_id into champ from public.rng_daily
+   where day = today - 1
+   order by best_ep desc, reached_at asc limit 1;                  -- a tie goes to whoever got there first
+  select account_id into champ2 from public.rng_daily
+   where day = today - 2
+   order by best_ep desc, reached_at asc limit 1;
+  return coalesce((
+    select json_agg(json_build_object('id', b.account_id, 'username', a.display, 'data', b.data,
+                                      'crown', b.account_id = champ,
+                                      'crowns', case when b.account_id = champ and b.account_id = champ2 then 2
+                                                     when b.account_id = champ then 1 else 0 end,
+                                      'online', coalesce(a.last_seen > now() - interval '70 seconds', false),
+                                      'month_daily', coalesce(m.total, 0), 'month_days', coalesce(m.days, 0)))
+      from public.rng_board b
+      join public.rng_accounts a on a.id = b.account_id
+      left join (select account_id, sum(best_ep) as total, count(*) as days
+                   from public.rng_daily
+                  where day between date_trunc('month', today)::date and today
+                  group by account_id) m on m.account_id = b.account_id), '[]'::json);
+end $$;
