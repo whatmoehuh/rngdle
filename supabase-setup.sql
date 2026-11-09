@@ -341,3 +341,41 @@ end $$;
 --   delete all scores (keeps accounts):  select public.rng_reset_all();
 --   reset a password:  update public.rng_accounts set pw_hash = extensions.crypt('newpass123', extensions.gen_salt('bf', 10)) where username = 'name';
 --   delete a player:   delete from public.rng_accounts where username = 'name';
+
+-- ============================================================
+-- RNGdle v1.0.2: server-wide highscore places for the line under a roll.
+-- Where would a roll worth p_ep land in everyone's top-25 lists (all-time, this month, today)?
+-- Rank = 1 + number of saved rolls worth at least as much (an earlier roll wins a tie).
+-- Players on an older page version only have their single best roll in the board, so that one counts.
+-- Safe to run more than once.
+create or replace function public.rng_rank(p_token text, p_ep bigint) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  dk text := to_char(now() at time zone 'Europe/Berlin', 'YYYY-MM-DD');
+  mk text := to_char(now() at time zone 'Europe/Berlin', 'YYYY-MM');
+  r_all int; r_month int; r_day int;
+begin
+  if public.rng_session(p_token) is null then raise exception 'signed_out'; end if;
+
+  select 1 + count(*) into r_all
+    from public.rng_board b,
+         jsonb_array_elements(case when jsonb_typeof(b.data -> 'top_all') = 'array' then b.data -> 'top_all'
+                                   else jsonb_build_array(jsonb_build_object('ep', b.data -> 'best_ep')) end) e
+   where (e ->> 'ep')::bigint >= p_ep;
+
+  select 1 + count(*) into r_month
+    from public.rng_board b,
+         jsonb_array_elements(case when jsonb_typeof(b.data -> 'month' -> 'top') = 'array' then b.data -> 'month' -> 'top'
+                                   else jsonb_build_array(jsonb_build_object('ep', b.data -> 'month' -> 'best_ep')) end) e
+   where b.data -> 'month' ->> 'key' = mk and (e ->> 'ep')::bigint >= p_ep;
+
+  select 1 + count(*) into r_day
+    from public.rng_board b,
+         jsonb_array_elements(case when jsonb_typeof(b.data -> 'day' -> 'top') = 'array' then b.data -> 'day' -> 'top'
+                                   else jsonb_build_array(jsonb_build_object('ep', b.data -> 'day' -> 'best_ep')) end) e
+   where b.data -> 'day' ->> 'key' = dk and (e ->> 'ep')::bigint >= p_ep;
+
+  return json_build_object('all', r_all, 'month', r_month, 'day', r_day);
+end $$;
+revoke all on function public.rng_rank(text, bigint) from public;
+grant execute on function public.rng_rank(text, bigint) to anon, authenticated;

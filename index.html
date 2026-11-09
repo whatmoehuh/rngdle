@@ -257,6 +257,13 @@ html.sheet-open { overflow: hidden; }
     linear-gradient(120deg, var(--wine-hi), var(--wine), var(--wine-lo), var(--wine), var(--wine-hi)) border-box;
   background-size: auto, 300% 100%; box-shadow: 0 0 18px -3px color-mix(in srgb, var(--wine) 70%, transparent); }
 @keyframes wine-shift { from { background-position: 0 0, 0% 50%; } to { background-position: 0 0, 100% 50%; } }
+.chip[data-s="top"] { color: #e8ecf4; border: 1.5px solid transparent;
+  background: linear-gradient(var(--panel), var(--panel)) padding-box, linear-gradient(135deg, #f4f6fb, #9aa3b5, #5d6577, #c9cfdb) border-box; }
+.chip[data-s="top"][aria-pressed="true"] { color: var(--fg);
+  background: linear-gradient(color-mix(in srgb, #c9cfdb 12%, var(--card)), color-mix(in srgb, #c9cfdb 12%, var(--card))) padding-box,
+    linear-gradient(135deg, #f4f6fb, #9aa3b5, #5d6577, #c9cfdb) border-box;
+  box-shadow: 0 0 16px -4px color-mix(in srgb, #dfe3ec 55%, transparent); }
+#ranking.daytop { border-color: color-mix(in srgb, #c9cfdb 55%, var(--line)); box-shadow: 0 0 26px -12px color-mix(in srgb, #dfe3ec 70%, transparent); }
 #ranking.alltop { border-color: color-mix(in srgb, #e0346e 60%, var(--line)); box-shadow: 0 0 32px -10px color-mix(in srgb, #e0346e 80%, transparent); }
 @media (prefers-reduced-motion: reduce) { #rank-sort[data-p="all"] .chip[data-s="best"] { animation: none; } }
 #ranking.daily { border-color: color-mix(in srgb, var(--mythic) 50%, var(--line)); box-shadow: 0 0 26px -12px color-mix(in srgb, var(--mythic) 80%, transparent); }
@@ -335,6 +342,7 @@ img { max-width: 100%; }
         <button class="chip" data-p="all" aria-pressed="false">All-time</button>
       </div>
       <div class="chips" id="rank-sort">
+        <button class="chip" data-s="top" aria-pressed="false">Top 25 rolls</button>
         <button class="chip" data-s="daily" aria-pressed="false">Daily bests</button>
         <button class="chip" data-s="best" aria-pressed="true">Best roll</button>
         <button class="chip" data-s="avg" aria-pressed="false">Avg EP</button>
@@ -1065,7 +1073,7 @@ const compact = (list) => list.slice(0, 25).map((e) => ({ n: e.number, ep: e.ep,
 function summary() {
   const month = periodOf(state, "month");
   return Object.assign({ nick: nick.slice(0, 20), found: discovered(), top_all: compact(state.highscores) }, periodSummary(state),
-    { day: Object.assign({ key: periodKey("day") }, periodSummary(periodOf(state, "day"))),
+    { day: Object.assign({ key: periodKey("day"), top: compact(periodOf(state, "day").highscores) }, periodSummary(periodOf(state, "day"))),
       month: Object.assign({ key: periodKey("month"), top: compact(month.highscores),
                              daily_sum: Object.values(monthDaily(state)).reduce((a, b) => a + b, 0) }, periodSummary(month)) });
 }
@@ -1092,15 +1100,17 @@ const SORTS = {
   daily: { val: (p) => p.daily_sum ?? p.best_ep ?? 0, show: (p) => fmt(p.daily_sum ?? p.best_ep ?? 0), unit: () => "DAILY BESTS", color: () => "var(--fg)" },
   rolls: { val: (p) => p.rolls || 0, show: (p) => fmt(p.rolls || 0), unit: () => "ROLLS", color: () => "var(--fg)" },
 };
+SORTS.top = SORTS.best;
 let rankSort = (() => { try { return localStorage.getItem("rngdle-pocket-rank") || "best"; } catch { return "best"; } })();
 if (!SORTS[rankSort]) rankSort = "best";
 let rankPeriod = (() => { try { return localStorage.getItem("rngdle-pocket-rank-period") || "day"; } catch { return "day"; } })();
 if (!["day", "month", "all"].includes(rankPeriod)) rankPeriod = "day";
 // Which rankings each period offers. "best" is one row per player today, and the top 25 single rolls for month / all-time.
-const PERIOD_SORTS = { day: ["best", "rolls"], month: ["daily", "best", "rolls"], all: ["best", "avg", "rolls"] };
+const PERIOD_SORTS = { day: ["top", "best", "rolls"], month: ["daily", "best", "rolls"], all: ["best", "avg", "rolls"] };
 const RANK_NOTE = {
   best: { day: "Each player's best roll today. Tap one to see it.", month: "The 25 best rolls this month. A player can appear more than once. Tap one to see it.",
           all: "The 25 best rolls of all time. A player can appear more than once. Tap one to see it." },
+  top: "The 25 best rolls today. A player can appear more than once. Tap one to see it.",
   daily: "Each player's best roll of every day this month, added up.",
   avg: "Average EP per roll, all-time: the fairest luck comparison.",
   rolls: "Number of rolls.",
@@ -1112,7 +1122,7 @@ const TOP_N = 25;
 function topRolls(period) {
   const out = [];
   for (const p of players) {
-    let list = period === "all" ? p.top_all : (p.month && p.month.key === periodKey("month") ? p.month.top : null);
+    let list = period === "all" ? p.top_all : (p[period] && p[period].key === periodKey(period) ? p[period].top : null);
     if (!Array.isArray(list)) {                       // players on an older version of the page: only their single best is known
       const q = playerPeriod(p, period);
       list = q && q.best_number != null ? [{ n: q.best_number, ep: q.best_ep, t: q.best_tier, b: (q.best_top || [])[0], d: "" }] : [];
@@ -1140,11 +1150,12 @@ async function renderRanking() {
   const box = $("ranking");
   box.classList.toggle("daily", rankSort === "daily");
   box.classList.toggle("alltop", rankSort === "best" && rankPeriod === "all");
+  box.classList.toggle("daytop", rankSort === "top");
   $("rank-sort").dataset.p = rankPeriod;
   const msg = (t) => { box.innerHTML = `<div class="empty">${t}</div>`; rankList = []; };
   if (playersState === "error") return msg("Can't load the leaderboard right now. Try again later.");
   const sort = SORTS[rankSort];
-  const rollMode = rankSort === "best" && rankPeriod !== "day";
+  const rollMode = rankSort === "top" || (rankSort === "best" && rankPeriod !== "day");
   const list = rollMode ? topRolls(rankPeriod) : players.map((p) => { const q = playerPeriod(p, rankPeriod); return q && (q.rolls || 0) > 0
       ? Object.assign({}, q, { id: p.id, nick: p.nick, name: p.name, found: p.found, crown: p.crown }) : null; })
     .filter(Boolean).filter((p) => rankSort !== "daily" || sort.val(p) > 0)
@@ -1201,11 +1212,12 @@ async function onRoll() {
   const { newIds, rank, boardFull, monthRank, dayRank } = freeRoll
     ? { newIds: new Set(rows.filter((x) => !state.badge_counts[x.b.id]).map((x) => x.b.id)) }
     : record(pending, total, tier, rows);
-  let note = null;
-  if (rank && (boardFull || rank <= 3)) note = rank === 1 ? "NEW ALL-TIME BEST!" : `New all-time highscore · #${rank}`;
-  else if (monthRank === 1 && state.month.rolls > 1) note = "Best roll this month!";
-  else if (dayRank === 1 && state.day.rolls > 1) note = "Best roll today!";
+  let note = null;               // your own records; a server-wide top-25 place replaces this once the server answers
+  if (rank && (boardFull || rank <= 3)) note = `YOUR ALL-TIME BEST – #${rank}`;
+  else if (monthRank === 1 && state.month.rolls > 1) note = "YOUR BEST ROLL THIS MONTH";
+  else if (dayRank === 1 && state.day.rolls > 1) note = "YOUR BEST ROLL TODAY";
   pendingResult = { n: pending, rows: revealOrder(rows), total, tier, newIds, note };
+  if (!freeRoll) serverRankNote(pendingResult);
   phase = "spinning"; result = null; shown = 0;
   $("cards").innerHTML = ""; $("listhead").hidden = true;
   renderStage(); updateButton();
@@ -1436,7 +1448,7 @@ $("ranking").addEventListener("click", (e) => {
   const p = rankList[+b.dataset.k];
   if (!p || p.best_number == null) return;
   const who = p.id === uid ? "You" : rankNames[p.id] || "Player";
-  showStatic(p.best_number, rankSort === "best" && rankPeriod !== "day" ? `#${+b.dataset.k + 1} ${PERIOD_LABEL[rankPeriod]} · ${who}${p.date ? ` · ${shortDate(p.date)}` : ""}`
+  showStatic(p.best_number, rankSort === "top" || (rankSort === "best" && rankPeriod !== "day") ? `#${+b.dataset.k + 1} ${PERIOD_LABEL[rankPeriod]} · ${who}${p.date ? ` · ${shortDate(p.date)}` : ""}`
     : `${p.id === uid ? "Your" : `${who}'s`} best roll ${PERIOD_LABEL[rankPeriod]}`, p.date || (rankPeriod === "day" ? stamp() : ""));
 });
 function saveNick() {
@@ -1479,6 +1491,19 @@ $("b-reset").addEventListener("click", () => {
   renderChrome(); markDirtyViews(); renderStats();
   $("backup-msg").textContent = "All progress deleted.";
 });
+
+/* ================= server-wide highscore line ================= */
+/** Asks the server where this roll lands in everyone's top 25 (all-time, this month, today) and shows the best place. */
+async function serverRankNote(res) {
+  const { data, error } = await rpc("rng_rank", { p_token: token, p_ep: res.total });
+  if (error || !data) return;                       // no answer (or SQL not installed yet): keep the personal line
+  const r = (k) => Number(data[k]) || Infinity;
+  const s = r("all") <= TOP_N ? `ALL-TIME BEST ROLL – #${r("all")}` : r("month") <= TOP_N ? `BEST ROLL OF THE MONTH – #${r("month")}`
+    : r("day") <= TOP_N ? `BEST ROLL OF THE DAY – #${r("day")}` : null;
+  if (!s) return;
+  res.note = s;
+  if (result === res && phase === "done") renderStage();
+}
 
 /* ================= patch notes ================= */
 const APP_VERSION = "1.0.1", SEEN_KEY = "rngdle-seen-patch";
