@@ -1431,7 +1431,8 @@ $("scores").addEventListener("click", (e) => {
 $("rank-period").addEventListener("click", (e) => {
   const c = e.target.closest("button[data-p]"); if (!c) return;
   rankPeriod = c.dataset.p; try { localStorage.setItem("rngdle-pocket-rank-period", rankPeriod); } catch {}
-  fixSort();
+  rankSort = PERIOD_SORTS[rankPeriod][0];          // each period opens on its main ranking (Best roll / Daily bests / Top 25)
+  try { localStorage.setItem("rngdle-pocket-rank", rankSort); } catch {}
   renderRanking();
 });
 $("scores-period").addEventListener("click", (e) => {
