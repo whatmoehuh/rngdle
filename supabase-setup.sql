@@ -343,7 +343,7 @@ end $$;
 --   delete a player:   delete from public.rng_accounts where username = 'name';
 
 -- ============================================================
--- RNGdle v1.0.2–v1.0.4 database changes in one go (safe to run more than once).
+-- RNGdle v1.0.2 database changes in one go (highscore places, streak crowns, online dot) (safe to run more than once).
 -- Written without "select … into" because the Supabase SQL editor mistakes that for creating a table.
 
 -- v1.0.2: server-wide highscore places
@@ -375,15 +375,18 @@ end $$;
 revoke all on function public.rng_rank(text, bigint) from public;
 grant execute on function public.rng_rank(text, bigint) to anon, authenticated;
 
--- v1.0.4: online dot
+-- online dot: an open page checks in; the answer lists everyone with the game open (last 100 s)
 alter table public.rng_accounts add column if not exists last_seen timestamptz;
 
-create or replace function public.rng_ping(p_token text, p_here boolean default true) returns void
+drop function if exists public.rng_ping(text, boolean);
+create or replace function public.rng_ping(p_token text, p_here boolean default true) returns json
   language plpgsql security definer set search_path = public, extensions as $$
 declare a uuid := public.rng_session(p_token);
 begin
   if a is null then raise exception 'signed_out'; end if;
   update public.rng_accounts set last_seen = case when p_here then now() else null end where id = a;
+  if not p_here then return '[]'::json; end if;
+  return coalesce((select json_agg(id) from public.rng_accounts where last_seen > now() - interval '100 seconds'), '[]'::json);
 end $$;
 revoke all on function public.rng_ping(text, boolean) from public;
 grant execute on function public.rng_ping(text, boolean) to anon, authenticated;
@@ -406,7 +409,7 @@ begin
                                       'crown', b.account_id = champ,
                                       'crowns', case when b.account_id = champ and b.account_id = champ2 then 2
                                                      when b.account_id = champ then 1 else 0 end,
-                                      'online', coalesce(a.last_seen > now() - interval '70 seconds', false),
+                                      'online', coalesce(a.last_seen > now() - interval '100 seconds', false),
                                       'month_daily', coalesce(m.total, 0), 'month_days', coalesce(m.days, 0)))
       from public.rng_board b
       join public.rng_accounts a on a.id = b.account_id
