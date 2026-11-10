@@ -1036,10 +1036,10 @@ const PERKS = [
 ];
 function perk() { const L = level(); let p = PERKS[0]; for (const q of PERKS) if (L >= q.lv) p = q; return p; }
 const AVATARS = [
-  { id: "dice1", lv: 1, name: "Calm Die" }, { id: "dice2", lv: 1, name: "Happy Die" }, { id: "dice3", lv: 1, name: "Grumpy Die" },
-  { id: "frog", lv: 5, name: "Frog" }, { id: "bubbles", lv: 15, name: "Bubbles" }, { id: "chom", lv: 25, name: "Chom" },
-  { id: "snail", lv: 30, name: "Snail" }, { id: "blob", lv: 45, name: "Blob" }, { id: "smile", lv: 55, name: "Smile" },
-  { id: "dog", lv: 65, name: "Dog" }, { id: "hat", lv: 80, name: "Straw Hat" }, { id: "catdemon", lv: 99, name: "Cat Demon" },
+  { id: "dice1", lv: 1, name: "Neutob" }, { id: "dice2", lv: 1, name: "Happob" }, { id: "dice3", lv: 1, name: "Sadob" },
+  { id: "frog", lv: 5, name: "Flob" }, { id: "bubbles", lv: 15, name: "Bubles" }, { id: "chom", lv: 25, name: "Chom" },
+  { id: "snail", lv: 30, name: "Slob" }, { id: "blob", lv: 45, name: "Blob" }, { id: "smile", lv: 55, name: "Sob" },
+  { id: "dog", lv: 65, name: "Glob" }, { id: "hat", lv: 80, name: "Hat" }, { id: "catdemon", lv: 99, name: "Gibby" },
 ];
 const SKINS = [
   { id: "default", lv: 1, name: "Classic" }, { id: "brass", lv: 40, name: "Slot Machine" }, { id: "lofi", lv: 70, name: "Pastel Love" },
@@ -1941,7 +1941,7 @@ let lvTimer = null;
 function showLevelUp(to, from) {
   const un = [];
   for (let L = (from || to - 1) + 1; L <= to; L++) {
-    for (const a of AVATARS) if (a.lv === L) un.push(`${a.name} picture`);
+    for (const a of AVATARS) if (a.lv === L) un.push(a.name);
     for (const s of SKINS) if (s.lv === L) un.push(`${s.name} button`);
     for (const n of NAME_STYLES) if (n.lv === L) un.push(`${n.name} name`);
     for (const p of PERKS) if (p.lv === L && p.name) un.push(p.name);
