@@ -437,14 +437,9 @@ img { max-width: 100%; }
 
 <script src="config.js"></script>
 <script>
-/* RNGdle badge rules – JavaScript port of rngdle_badges.py.
-   Verified against the Python version over all 1,000,001 rolls (verify_js.js). */
-/* RNGdle badge rules – JavaScript port of rngdle_badges.py.
-   The 233 original badges were verified against the Python version over all 1,000,001 rolls (verify_js.js).
-   v1.0.1 added 14 badges (incl. date badges) that exist only here, checked with newbadges_proposal.js. */
-/* RNGdle badge rules – JavaScript port of rngdle_badges.py.
-   The 233 original badges were verified against the Python version over all 1,000,001 rolls (verify_js.js).
-   v1.0.1 added 14 badges (incl. date badges), v1.0.2 six 9+10 badges; they exist only here and were checked with independent counts. */
+/* RNGdle badge rules (253 badges). API: RNG.init(meta), RNG.evaluate(n, date), RNG.dateCtx(date).
+   The original 233 badges match the Python version (src/rngdle_badges.py, used by the PC app);
+   the 20 added in v1.0.1 and v1.0.2 exist only here. build_dist.js checks every badge's EP against its real chance. */
 const RNG = (function () {
   const MAX_ROLL = 1000000;
 
