@@ -124,7 +124,8 @@ revoke all on function public.rng_register(text, text), public.rng_login(text, t
 grant execute on function public.rng_register(text, text), public.rng_login(text, text), public.rng_load(text),
   public.rng_save(text, jsonb, jsonb), public.rng_board(text), public.rng_logout(text) to anon, authenticated;
 
--- 5. Server-side rolls with a cooldown: numbers come from the database, at most one roll per 10 seconds per account.
+-- 5. Server-side rolls with a cooldown: numbers come from the database, at most one roll per cooldown per account.
+--    (rng_roll is redefined further down; the last version, in the v1.1.0 section, is the one that counts.)
 alter table public.rng_accounts add column if not exists next_roll_at timestamptz not null default now();
 
 create or replace function public.rng_roll(p_token text) returns json
@@ -132,7 +133,7 @@ create or replace function public.rng_roll(p_token text) returns json
 declare a uuid := public.rng_session(p_token); nxt timestamptz;
 begin
   if a is null then raise exception 'signed_out'; end if;
-  update public.rng_accounts set next_roll_at = now() + interval '10 seconds'     -- ← the cooldown
+  update public.rng_accounts set next_roll_at = now() + interval '10 seconds'
    where id = a and next_roll_at <= now()
   returning next_roll_at into nxt;
   if not found then
@@ -156,7 +157,8 @@ end $$;
 revoke all on function public.rng_roll(text) from public;
 grant execute on function public.rng_roll(text) to anon, authenticated;
 
--- 6. Seasons: lets the owner wipe all scores. Saves from an older season are refused, so phones can't upload old progress again.
+-- 6. Seasons: saves carry a season number, and saves from an older season are refused.
+--    The tool that started a new season (and deleted all scores) was removed in v1.1.0, so the season stays 1.
 create table if not exists public.rng_meta (
   id     boolean primary key default true check (id),
   season int not null default 1
@@ -194,17 +196,6 @@ end $$;
 revoke all on function public.rng_save(text, jsonb, jsonb, int) from public;
 grant execute on function public.rng_save(text, jsonb, jsonb, int) to anon, authenticated;
 
--- Owner only (run in the SQL Editor): wipes every save and the leaderboard, keeps all accounts.
-create or replace function public.rng_reset_all() returns text
-  language plpgsql security definer set search_path = public as $$
-begin
-  update public.rng_meta set season = season + 1;
-  delete from public.rng_saves where true;
-  delete from public.rng_board where true;
-  return 'All scores deleted. New season: ' || (select season from public.rng_meta);
-end $$;
-revoke all on function public.rng_reset_all() from public, anon, authenticated;
-
 -- 7. Rigged rolls (owner only): make a player's next rolls land on a chosen number. They don't count for anything.
 create table if not exists public.rng_pranks (
   account_id uuid primary key references public.rng_accounts(id) on delete cascade,
@@ -213,29 +204,6 @@ create table if not exists public.rng_pranks (
 );
 alter table public.rng_pranks enable row level security;
 revoke all on public.rng_pranks from anon, authenticated;
-
-create or replace function public.rng_roll(p_token text) returns json
-  language plpgsql security definer set search_path = public, extensions as $$
-declare a uuid := public.rng_session(p_token); nxt timestamptz; rigged int;
-begin
-  if a is null then raise exception 'signed_out'; end if;
-  update public.rng_accounts set next_roll_at = now() + interval '10 seconds'
-   where id = a and next_roll_at <= now()
-  returning next_roll_at into nxt;
-  if not found then
-    select next_roll_at into nxt from public.rng_accounts where id = a;
-    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
-  end if;
-  update public.rng_pranks set remaining = remaining - 1
-   where account_id = a and remaining > 0
-  returning number into rigged;
-  if rigged is not null then
-    return json_build_object('ok', true, 'number', rigged, 'free', true,
-                             'wait_ms', ceil(extract(epoch from nxt - now()) * 1000));
-  end if;
-  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int,
-                           'wait_ms', ceil(extract(epoch from nxt - now()) * 1000));
-end $$;
 
 -- select public.rng_prank('gurfild', 302539, 10);   -- next 10 rolls of gurfild are 302539
 -- select public.rng_prank('gurfild', 0, 0);         -- stop it early
@@ -292,31 +260,8 @@ begin
   end if;
 end $$;
 
-create or replace function public.rng_board(p_token text) returns json
-  language plpgsql security definer set search_path = public, extensions as $$
-declare champ uuid;
-begin
-  if public.rng_session(p_token) is null then raise exception 'signed_out'; end if;
-  select account_id into champ from public.rng_daily
-   where day = (now() at time zone 'Europe/Berlin')::date - 1
-   order by best_ep desc, reached_at asc limit 1;                  -- a tie goes to whoever got there first
-  return coalesce((select json_agg(json_build_object('id', b.account_id, 'username', a.display, 'data', b.data,
-                                                     'crown', b.account_id = champ))
-                     from public.rng_board b join public.rng_accounts a on a.id = b.account_id), '[]'::json);
-end $$;
-
-create or replace function public.rng_reset_all() returns text
-  language plpgsql security definer set search_path = public as $$
-begin
-  update public.rng_meta set season = season + 1;
-  delete from public.rng_saves where true;
-  delete from public.rng_board where true;
-  delete from public.rng_daily where true;
-  return 'All scores deleted. New season: ' || (select season from public.rng_meta);
-end $$;
-revoke all on function public.rng_reset_all() from public, anon, authenticated;
-
 -- 9. Leaderboard: also send each player's sum of daily bests for the current month (German time).
+--    (rng_board is redefined in the v1.0.2 section below with streak crowns and the online flag.)
 create or replace function public.rng_board(p_token text) returns json
   language plpgsql security definer set search_path = public, extensions as $$
 declare champ uuid; today date := (now() at time zone 'Europe/Berlin')::date;
@@ -338,9 +283,9 @@ begin
 end $$;
 
 -- Owner tools (run by hand in the SQL Editor when needed):
---   delete all scores (keeps accounts):  select public.rng_reset_all();
 --   reset a password:  update public.rng_accounts set pw_hash = extensions.crypt('newpass123', extensions.gen_salt('bf', 10)) where username = 'name';
 --   delete a player:   delete from public.rng_accounts where username = 'name';
+--   prank a player:    see section 7
 
 -- ============================================================
 -- RNGdle v1.0.2 database changes in one go (highscore places, streak crowns, online dot) (safe to run more than once).
@@ -418,3 +363,49 @@ begin
                   where day between date_trunc('month', today)::date and today
                   group by account_id) m on m.account_id = b.account_id), '[]'::json);
 end $$;
+
+-- ============================================================
+-- RNGdle v1.1.0 database changes in one go (levels). Safe to run more than once.
+-- Variables are filled with ":= (select …)" only, because the Supabase SQL editor misreads the other way as creating a table.
+
+-- v1.1.0: the roll cooldown gets shorter with the player's level:
+--   10 s · 9 s from level 50 · 8.25 s from level 75 · 7.75 s from level 99.
+-- The level comes from the XP in the player's own save (written by their phone, same trust as the leaderboard).
+-- The XP numbers must match XP_TABLE in app_template.html (levels 50, 75 and 99).
+create or replace function public.rng_roll(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  xp numeric;
+  cd interval;
+  nxt timestamptz;
+  rigged int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  nxt := (select next_roll_at from public.rng_accounts where id = a);
+  if nxt > now() then
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
+  end if;
+  xp := coalesce((select case when jsonb_typeof(data -> 'xp') = 'number' then (data ->> 'xp')::numeric end
+                    from public.rng_saves where account_id = a), 0);
+  cd := case when xp >= 968000000 then interval '7.75 seconds'     -- level 99
+             when xp >= 152000000 then interval '8.25 seconds'     -- level 75
+             when xp >= 22700000  then interval '9 seconds'        -- level 50
+             else interval '10 seconds' end;
+  update public.rng_accounts set next_roll_at = now() + cd where id = a and next_roll_at <= now();
+  if not found then                                              -- another roll got there first
+    nxt := (select next_roll_at from public.rng_accounts where id = a);
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
+  end if;
+  rigged := (select number from public.rng_pranks where account_id = a and remaining > 0);
+  if rigged is not null then                                     -- owner prank: fixed number, doesn't count
+    update public.rng_pranks set remaining = remaining - 1 where account_id = a;
+    return json_build_object('ok', true, 'number', rigged, 'free', true, 'wait_ms', ceil(extract(epoch from cd) * 1000));
+  end if;
+  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int, 'wait_ms', ceil(extract(epoch from cd) * 1000));
+end $$;
+revoke all on function public.rng_roll(text) from public;
+grant execute on function public.rng_roll(text) to anon, authenticated;
+
+-- v1.1.0: the owner tool that deleted all scores is gone for good. Levels and scores never reset.
+drop function if exists public.rng_reset_all();
