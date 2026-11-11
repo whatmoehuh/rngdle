@@ -409,3 +409,45 @@ grant execute on function public.rng_roll(text) to anon, authenticated;
 
 -- v1.1.0: the owner tool that deleted all scores is gone for good. Levels and scores never reset.
 drop function if exists public.rng_reset_all();
+
+-- ============================================================
+-- RNGdle v1.1.1 database changes in one go. Safe to run more than once.
+-- Variables are filled with ":= (select …)" only, because the Supabase SQL editor misreads the other way as creating a table.
+
+-- v1.1.1: stronger faster-roll upgrades and the new XP table:
+--   cooldown 10 s · 9 s from level 50 · 8 s from level 75 · 7 s from level 99.
+-- The XP numbers must match XP_TABLE in app_template.html (levels 50, 75 and 99).
+create or replace function public.rng_roll(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  xp numeric;
+  cd interval;
+  nxt timestamptz;
+  rigged int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  nxt := (select next_roll_at from public.rng_accounts where id = a);
+  if nxt > now() then
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
+  end if;
+  xp := coalesce((select case when jsonb_typeof(data -> 'xp') = 'number' then (data ->> 'xp')::numeric end
+                    from public.rng_saves where account_id = a), 0);
+  cd := case when xp >= 565000000 then interval '7 seconds'      -- level 99
+             when xp >= 118000000 then interval '8 seconds'      -- level 75
+             when xp >= 22100000  then interval '9 seconds'      -- level 50
+             else interval '10 seconds' end;
+  update public.rng_accounts set next_roll_at = now() + cd where id = a and next_roll_at <= now();
+  if not found then                                              -- another roll got there first
+    nxt := (select next_roll_at from public.rng_accounts where id = a);
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
+  end if;
+  rigged := (select number from public.rng_pranks where account_id = a and remaining > 0);
+  if rigged is not null then                                     -- owner prank: fixed number, doesn't count
+    update public.rng_pranks set remaining = remaining - 1 where account_id = a;
+    return json_build_object('ok', true, 'number', rigged, 'free', true, 'wait_ms', ceil(extract(epoch from cd) * 1000));
+  end if;
+  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int, 'wait_ms', ceil(extract(epoch from cd) * 1000));
+end $$;
+revoke all on function public.rng_roll(text) from public;
+grant execute on function public.rng_roll(text) to anon, authenticated;
