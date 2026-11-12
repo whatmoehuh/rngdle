@@ -451,3 +451,35 @@ begin
 end $$;
 revoke all on function public.rng_roll(text) from public;
 grant execute on function public.rng_roll(text) to anon, authenticated;
+
+-- ============================================================
+-- RNGdle v1.3.0 database changes in one go (achievements). Safe to run more than once.
+-- Variables are filled with ":= (select …)" only, because the Supabase SQL editor misreads the other way as creating a table.
+
+-- Achievements: days won (best roll of a finished day, a tie goes to whoever got there first, same rule as the crowns)
+-- and day streaks (days in a row with a daily best saved), all counted from rng_daily. Read-only.
+create or replace function public.rng_feats(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  today date := (now() at time zone 'Europe/Berlin')::date;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  return (
+    with winners as (
+      select distinct on (day) day, account_id from public.rng_daily
+       where day < today
+       order by day, best_ep desc, reached_at asc),
+    won as (select day from winners where account_id = a),
+    played as (select day from public.rng_daily where account_id = a),
+    wruns as (select count(*) as n from (select day - (row_number() over (order by day))::int as g from won) x group by g),
+    pruns as (select max(day) as last, count(*) as n from (select day, day - (row_number() over (order by day))::int as g from played) x group by g)
+    select json_build_object(
+      'wins', (select count(*) from won),
+      'win_streak', coalesce((select max(n) from wruns), 0),
+      'play_streak', coalesce((select max(n) from pruns), 0),
+      'play_last', (select max(day) from played),
+      'play_cur', coalesce((select n from pruns where last >= today - 1 order by last desc limit 1), 0)));
+end $$;
+revoke all on function public.rng_feats(text) from public;
+grant execute on function public.rng_feats(text) to anon, authenticated;
