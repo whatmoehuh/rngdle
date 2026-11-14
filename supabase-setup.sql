@@ -483,3 +483,148 @@ begin
 end $$;
 revoke all on function public.rng_feats(text) from public;
 grant execute on function public.rng_feats(text) to anon, authenticated;
+
+-- ============================================================
+-- RNGdle v1.4.0 database changes in one go (Party Potion, Overclock, Autoroller XL). Safe to run more than once.
+-- Variables are filled with ":= (select …)" only, because the Supabase SQL editor misreads the other way as creating a table.
+
+-- Party Potion: one party for everybody, kept in the single rng_meta row
+alter table public.rng_meta add column if not exists party_until timestamptz;
+alter table public.rng_meta add column if not exists party_by uuid;
+alter table public.rng_meta add column if not exists party_ids uuid[] not null default '{}';
+-- Autoroller / Autoroller XL: when it started, when it ends, seconds between rolls, how many rolls in total, how many were handed out
+alter table public.rng_accounts add column if not exists auto_start timestamptz;
+alter table public.rng_accounts add column if not exists auto_until timestamptz;
+alter table public.rng_accounts add column if not exists auto_done int not null default 0;
+alter table public.rng_accounts add column if not exists auto_step int not null default 60;
+alter table public.rng_accounts add column if not exists auto_max int not null default 60;
+
+-- Rolls: cooldown 10 s · 9 s from level 50 · 8 s from level 75 · 7 s from level 99 (must match XP_TABLE / PERKS in app_template.html),
+-- −1 s with Overclock (shop.oc in the save), and half of that while a party is on.
+create or replace function public.rng_roll(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  xp numeric;
+  oc boolean;
+  cd interval;
+  nxt timestamptz;
+  rigged int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  nxt := (select next_roll_at from public.rng_accounts where id = a);
+  if nxt > now() then
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
+  end if;
+  xp := coalesce((select case when jsonb_typeof(data -> 'xp') = 'number' then (data ->> 'xp')::numeric end
+                    from public.rng_saves where account_id = a), 0);
+  oc := coalesce((select (data -> 'shop' ->> 'oc') = '1' from public.rng_saves where account_id = a), false);
+  cd := case when xp >= 565000000 then interval '7 seconds'      -- level 99
+             when xp >= 118000000 then interval '8 seconds'      -- level 75
+             when xp >= 22100000  then interval '9 seconds'      -- level 50
+             else interval '10 seconds' end;
+  if oc then cd := cd - interval '1 second'; end if;                                   -- Overclock (shop)
+  if coalesce((select party_until > now() from public.rng_meta), false) then cd := cd / 2; end if;   -- Party Potion (shop)
+  update public.rng_accounts set next_roll_at = now() + cd where id = a and next_roll_at <= now();
+  if not found then                                              -- another roll got there first
+    nxt := (select next_roll_at from public.rng_accounts where id = a);
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)));
+  end if;
+  rigged := (select number from public.rng_pranks where account_id = a and remaining > 0);
+  if rigged is not null then                                     -- owner prank: fixed number, doesn't count
+    update public.rng_pranks set remaining = remaining - 1 where account_id = a;
+    return json_build_object('ok', true, 'number', rigged, 'free', true, 'wait_ms', ceil(extract(epoch from cd) * 1000));
+  end if;
+  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int, 'wait_ms', ceil(extract(epoch from cd) * 1000));
+end $$;
+revoke all on function public.rng_roll(text) from public;
+grant execute on function public.rng_roll(text) to anon, authenticated;
+
+-- Check-in (replaces rng_ping for v1.4.0 pages; rng_ping stays for pages that are still open):
+-- the ids of everyone online, and the party. Coming online during a party adds 1 minute (once per player).
+create or replace function public.rng_pulse(p_token text, p_here boolean default true) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); joined boolean := false;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  update public.rng_accounts set last_seen = case when p_here then now() else null end where id = a;
+  if not p_here then return '{}'::json; end if;
+  update public.rng_meta set party_until = party_until + interval '1 minute', party_ids = party_ids || a
+    where id and party_until > now() and not (a = any(party_ids));
+  joined := found;
+  return json_build_object(
+    'online', coalesce((select json_agg(id) from public.rng_accounts where last_seen > now() - interval '100 seconds'), '[]'::json),
+    'joined', joined,
+    'party', (select case when m.party_until > now() then json_build_object(
+                'left_ms', ceil(extract(epoch from m.party_until - now()) * 1000),
+                'by', (select display from public.rng_accounts where id = m.party_by),
+                'n', cardinality(m.party_ids),
+                'mine', m.party_by = a) end
+              from public.rng_meta m where m.id));
+end $$;
+revoke all on function public.rng_pulse(text, boolean) from public;
+grant execute on function public.rng_pulse(text, boolean) to anon, authenticated;
+
+-- Party Potion: 2 minutes + 1 minute for every other player online right now. The price is paid on the phone.
+create or replace function public.rng_party_start(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); others int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if coalesce((select party_until > now() from public.rng_meta), false) then raise exception 'party_running'; end if;
+  update public.rng_accounts set last_seen = now() where id = a;
+  others := (select count(*) from public.rng_accounts where last_seen > now() - interval '100 seconds' and id <> a);
+  update public.rng_meta
+     set party_until = now() + interval '2 minutes' + others * interval '1 minute',
+         party_by = a,
+         party_ids = array(select id from public.rng_accounts where last_seen > now() - interval '100 seconds')
+   where id;
+  return public.rng_pulse(p_token, true);
+end $$;
+revoke all on function public.rng_party_start(text) from public;
+grant execute on function public.rng_party_start(text) to anon, authenticated;
+
+-- Autoroller ('std': every 30 s for 15 min) and Autoroller XL ('xl': every minute for 1 hour), also while the player is offline.
+-- The price is paid on the phone. Only one runs at a time.
+drop function if exists public.rng_auto_start(text);
+create or replace function public.rng_auto_start(p_token text, p_kind text default 'xl') returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); stp int; mx int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if coalesce((select auto_until > now() from public.rng_accounts where id = a), false) then raise exception 'auto_running'; end if;
+  stp := case when p_kind = 'std' then 30 else 60 end;
+  mx  := case when p_kind = 'std' then 30 else 60 end;
+  update public.rng_accounts set auto_start = now(), auto_until = now() + stp * mx * interval '1 second',
+         auto_step = stp, auto_max = mx, auto_done = 0 where id = a;
+  return json_build_object('left_ms', stp * mx * 1000);
+end $$;
+revoke all on function public.rng_auto_start(text, text) from public;
+grant execute on function public.rng_auto_start(text, text) to anon, authenticated;
+
+-- Hands out the autoroller's rolls that are due and not handed out yet (numbers picked here, with their Berlin time).
+create or replace function public.rng_auto_claim(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  st timestamptz; un timestamptz; dn int; due int; lft bigint; stp int; mx int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  st := (select auto_start from public.rng_accounts where id = a);
+  un := (select auto_until from public.rng_accounts where id = a);
+  dn := (select auto_done from public.rng_accounts where id = a);
+  stp := (select auto_step from public.rng_accounts where id = a);
+  mx := (select auto_max from public.rng_accounts where id = a);
+  if st is null then return json_build_object('rolls', '[]'::json, 'left_ms', 0); end if;
+  lft := greatest(0, ceil(extract(epoch from un - now()) * 1000));
+  due := least(mx, floor(extract(epoch from least(now(), un) - st) / stp)::int);
+  if due <= dn then return json_build_object('rolls', '[]'::json, 'left_ms', lft); end if;
+  update public.rng_accounts set auto_done = due where id = a and auto_done = dn;     -- two phones claiming at once: only one gets them
+  if not found then return json_build_object('rolls', '[]'::json, 'left_ms', lft); end if;
+  return json_build_object('left_ms', lft, 'rolls',
+    (select json_agg(json_build_object('n', floor(random() * 1000001)::int,
+                                       'at', to_char((st + k * stp * interval '1 second') at time zone 'Europe/Berlin', 'YYYY-MM-DD HH24:MI')) order by k)
+       from generate_series(dn + 1, due) k));
+end $$;
+revoke all on function public.rng_auto_claim(text) from public;
+grant execute on function public.rng_auto_claim(text) to anon, authenticated;
