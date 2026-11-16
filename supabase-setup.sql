@@ -628,3 +628,198 @@ begin
 end $$;
 revoke all on function public.rng_auto_claim(text) from public;
 grant execute on function public.rng_auto_claim(text) to anon, authenticated;
+
+-- ============================================================
+-- RNGdle Pocket v1.4.1 (15.11.2026, extended 16.11.): save versions + a minimum game version.
+-- 1. Save versions: every save carries a version number "rev". The server only takes a save whose rev is exactly one higher than the
+--    one it holds, so an outdated copy of the game (second phone, Safari + home-screen app, an old tab) can't overwrite newer progress;
+--    it gets 'stale_save' and reloads. rng_pulse returns the save's rev, so an outdated copy notices within ~15 s or when it's opened.
+-- 2. Minimum game version (rng_meta.min_ver, e.g. 10401 = v1.4.1): pages send their version (p_ver). An older page can't save or roll
+--    any more ('update_required') and reloads into the new version; rng_pulse returns min_ver so open pages notice by themselves.
+--    Pages from before v1.4.1 send no version: their saves get 'new_season' (they drop their local copy and reload).
+--    A release that needs everyone on the new version ends with: update public.rng_meta set min_ver = <version> where id;
+-- 3. (16.11. evening) rng_roll gets p_rev: a copy of the game whose save is older than the server's can't roll ('stale', no cooldown
+--    used); it loads the newer save first. rng_roll also returns the party, so a party reaches a player with their next roll.
+-- 4. Party Potion / Autoroller start in one step (two taps or two phones can't both start and pay) and take a request id p_req:
+--    asking again with the same id after a lost answer returns the same start instead of an error; rng_pulse returns the id of the
+--    caller's last party (preq) and autoroller (areq) so a phone can tell later whether its start went through and pay for it then.
+--    A new autoroller can't start while the last run still has rolls nobody collected ('auto_unclaimed').
+-- Safe to run twice. Owner tools that edit a save should add 1 to data.rev (open pages then reload by themselves).
+
+alter table public.rng_meta add column if not exists min_ver int not null default 0;
+alter table public.rng_meta add column if not exists party_req text;
+alter table public.rng_accounts add column if not exists auto_req text;
+
+-- Internal: a player who shows up during a party joins it (+1 min for everyone, once per player), then the party as the phone sees it.
+create or replace function public.rng_party_info(a uuid) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare joined boolean;
+begin
+  update public.rng_meta set party_until = party_until + interval '1 minute', party_ids = party_ids || a
+    where id and party_until > now() and not (a = any(party_ids));
+  joined := found;
+  return json_build_object('joined', joined,
+    'party', (select case when m.party_until > now() then json_build_object(
+                'left_ms', ceil(extract(epoch from m.party_until - now()) * 1000),
+                'by', (select display from public.rng_accounts where id = m.party_by),
+                'n', cardinality(m.party_ids),
+                'mine', m.party_by = a) end
+              from public.rng_meta m where m.id));
+end $$;
+revoke all on function public.rng_party_info(uuid) from public, anon, authenticated;
+
+drop function if exists public.rng_save(text, jsonb, jsonb, int);       -- replaced by the version with p_ver
+create or replace function public.rng_save(p_token text, p_save jsonb, p_board jsonb, p_season int, p_ver int default null) returns void
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); d date; today date := (now() at time zone 'Europe/Berlin')::date; ep bigint; nxt int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if p_season is distinct from (select season from public.rng_meta) then raise exception 'new_season'; end if;
+  nxt := (p_save ->> 'rev')::int;
+  if p_ver is null or nxt is null then raise exception 'new_season'; end if;            -- a page from before v1.4.1: it reloads
+  if p_ver < (select min_ver from public.rng_meta) then raise exception 'update_required'; end if;   -- an old version: it reloads, keeps its changes
+  if p_save is null or pg_column_size(p_save) > 300000 or pg_column_size(p_board) > 20000 then raise exception 'too_big'; end if;
+  insert into public.rng_saves (account_id, data, updated_at) values (a, p_save, now())
+    on conflict (account_id) do update set data = excluded.data, updated_at = now()
+    where coalesce((public.rng_saves.data ->> 'rev')::int, 0) = nxt - 1;
+  if not found then raise exception 'stale_save'; end if;               -- another copy saved in the meantime
+  if p_board is not null then
+    insert into public.rng_board (account_id, data, updated_at) values (a, p_board, now())
+      on conflict (account_id) do update set data = excluded.data, updated_at = now();
+    -- remember the day's best (only for today, or yesterday for saves that arrive just after midnight)
+    begin
+      d := (p_board -> 'day' ->> 'key')::date;
+      ep := (p_board -> 'day' ->> 'best_ep')::bigint;
+    exception when others then d := null;
+    end;
+    if d in (today, today - 1) and ep > 0 then
+      insert into public.rng_daily (day, account_id, best_ep, best_number) values (d, a, ep, (p_board -> 'day' ->> 'best_number')::int)
+        on conflict (day, account_id) do update
+          set best_number = case when excluded.best_ep > public.rng_daily.best_ep then excluded.best_number else public.rng_daily.best_number end,
+              reached_at  = case when excluded.best_ep > public.rng_daily.best_ep then now() else public.rng_daily.reached_at end,
+              best_ep     = greatest(public.rng_daily.best_ep, excluded.best_ep);
+    end if;
+  end if;
+end $$;
+revoke all on function public.rng_save(text, jsonb, jsonb, int, int) from public;
+grant execute on function public.rng_save(text, jsonb, jsonb, int, int) to anon, authenticated;
+
+drop function if exists public.rng_roll(text);                          -- replaced by the version with p_ver and p_rev
+drop function if exists public.rng_roll(text, int);
+create or replace function public.rng_roll(p_token text, p_ver int default null, p_rev int default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  xp numeric;
+  oc boolean;
+  cd interval;
+  nxt timestamptz;
+  rigged int;
+  pi json;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if p_ver < (select min_ver from public.rng_meta) then raise exception 'update_required'; end if;   -- p_ver null = a v1.4.0 page: still allowed to roll
+  if p_rev < coalesce((select (data ->> 'rev')::int from public.rng_saves where account_id = a), 0) then
+    return json_build_object('ok', false, 'stale', true);                       -- another copy saved since: load that first (no cooldown used)
+  end if;
+  pi := public.rng_party_info(a);
+  nxt := (select next_roll_at from public.rng_accounts where id = a);
+  if nxt > now() then
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  xp := coalesce((select case when jsonb_typeof(data -> 'xp') = 'number' then (data ->> 'xp')::numeric end
+                    from public.rng_saves where account_id = a), 0);
+  oc := coalesce((select (data -> 'shop' ->> 'oc') = '1' from public.rng_saves where account_id = a), false);
+  cd := case when xp >= 565000000 then interval '7 seconds'      -- level 99
+             when xp >= 118000000 then interval '8 seconds'      -- level 75
+             when xp >= 22100000  then interval '9 seconds'      -- level 50
+             else interval '10 seconds' end;
+  if oc then cd := cd - interval '1 second'; end if;                                   -- Overclock (shop)
+  if coalesce((select party_until > now() from public.rng_meta), false) then cd := cd / 2; end if;   -- Party Potion (shop)
+  update public.rng_accounts set next_roll_at = now() + cd where id = a and next_roll_at <= now();
+  if not found then                                              -- another roll got there first
+    nxt := (select next_roll_at from public.rng_accounts where id = a);
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  rigged := (select number from public.rng_pranks where account_id = a and remaining > 0);
+  if rigged is not null then                                     -- owner prank: fixed number, doesn't count
+    update public.rng_pranks set remaining = remaining - 1 where account_id = a;
+    return json_build_object('ok', true, 'number', rigged, 'free', true, 'wait_ms', ceil(extract(epoch from cd) * 1000), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int, 'wait_ms', ceil(extract(epoch from cd) * 1000), 'party', pi -> 'party', 'joined', pi -> 'joined');
+end $$;
+revoke all on function public.rng_roll(text, int, int) from public;
+grant execute on function public.rng_roll(text, int, int) to anon, authenticated;
+
+create or replace function public.rng_pulse(p_token text, p_here boolean default true) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); pi json;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  update public.rng_accounts set last_seen = case when p_here then now() else null end where id = a;
+  if not p_here then return '{}'::json; end if;
+  pi := public.rng_party_info(a);
+  return json_build_object(
+    'rev', (select coalesce((data ->> 'rev')::int, 0) from public.rng_saves where account_id = a),
+    'min_ver', (select min_ver from public.rng_meta where id),
+    'online', coalesce((select json_agg(id) from public.rng_accounts where last_seen > now() - interval '100 seconds'), '[]'::json),
+    'joined', (pi ->> 'joined')::boolean,
+    'party', pi -> 'party',
+    'preq', (select party_req from public.rng_meta where id and party_by = a),      -- id of this player's last party start
+    'areq', (select auto_req from public.rng_accounts where id = a));               -- id of this player's last autoroller start
+end $$;
+revoke all on function public.rng_pulse(text, boolean) from public;
+grant execute on function public.rng_pulse(text, boolean) to anon, authenticated;
+
+-- Party Potion: starts in one step (only if no party is running); the same p_req again returns the party it already started.
+drop function if exists public.rng_party_start(text);
+create or replace function public.rng_party_start(p_token text, p_req text default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); others int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if p_req is not null and exists (select 1 from public.rng_meta where id and party_req = p_req and party_by = a) then
+    return public.rng_pulse(p_token, true);                         -- asked again after a lost answer: it's already running
+  end if;
+  update public.rng_accounts set last_seen = now() where id = a;
+  others := (select count(*) from public.rng_accounts where last_seen > now() - interval '100 seconds' and id <> a);
+  update public.rng_meta
+     set party_until = now() + interval '2 minutes' + others * interval '1 minute',
+         party_by = a, party_req = p_req,
+         party_ids = array(select id from public.rng_accounts where last_seen > now() - interval '100 seconds')
+   where id and (party_until is null or party_until <= now());       -- one step: two starts at once can't both get through
+  if not found then raise exception 'party_running'; end if;
+  return public.rng_pulse(p_token, true);
+end $$;
+revoke all on function public.rng_party_start(text, text) from public;
+grant execute on function public.rng_party_start(text, text) to anon, authenticated;
+
+-- Autoroller: starts in one step, same p_req again = the same run, and not while the last run still has uncollected rolls.
+drop function if exists public.rng_auto_start(text, text);
+create or replace function public.rng_auto_start(p_token text, p_kind text default 'xl', p_req text default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); stp int; mx int; r public.rng_accounts;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  r := (select x from public.rng_accounts x where x.id = a);
+  if p_req is not null and r.auto_req = p_req then                 -- asked again after a lost answer: it's already running
+    return json_build_object('left_ms', greatest(0, ceil(extract(epoch from r.auto_until - now()) * 1000)));
+  end if;
+  if r.auto_start is not null and r.auto_done < least(r.auto_max, floor(extract(epoch from least(now(), r.auto_until) - r.auto_start) / r.auto_step)::int)
+     and r.auto_until <= now() then
+    raise exception 'auto_unclaimed';                                -- collect the last run's rolls first (rng_auto_claim)
+  end if;
+  stp := case when p_kind = 'std' then 30 else 60 end;
+  mx  := case when p_kind = 'std' then 30 else 60 end;
+  update public.rng_accounts set auto_start = now(), auto_until = now() + stp * mx * interval '1 second',
+         auto_step = stp, auto_max = mx, auto_done = 0, auto_req = p_req
+   where id = a and (auto_until is null or auto_until <= now());     -- one step: two starts at once can't both get through
+  if not found then raise exception 'auto_running'; end if;
+  return json_build_object('left_ms', stp * mx * 1000);
+end $$;
+revoke all on function public.rng_auto_start(text, text, text) from public;
+grant execute on function public.rng_auto_start(text, text, text) to anon, authenticated;
+
+-- This release needs everyone on v1.4.1 or newer.
+update public.rng_meta set min_ver = greatest(min_ver, 10401) where id;
+notify pgrst, 'reload schema';
