@@ -2066,9 +2066,9 @@ const AVATARS = [
   { id: "glucky", lv: 999, ach: "MYTHIC_10", lock: "10 MYTHICS", name: "Glucky" }, // earned with the Living Legend achievement
   { id: "evilflob", lv: 999, ach: "SIX66", name: "Evil Flob" },          // hidden: earned with the hidden 666 achievement; locked it shows a black "?" tile
   { id: "unlucky", lv: 999, ach: "WORST", lock: "WORST 10", name: "Unlucky" },   // earned with the hidden Rock Bottom achievement
-  { id: "jerry", lv: 999, shop: 1, name: "Jerry" },
-  { id: "catdemon", lv: 999, ach: "GIBBLER", cnt: () => `${Math.min(6, state.feats.gb || 0)}/6`, name: "The Gibbler" },   // v1.4.2: was the level 99 picture "Gibby"; hidden, its tile only shows the click counter
-  { id: "smug", lv: 999, ach: "NICE_TAP", name: "Smug" },                // v1.4.2: hidden: earned with the hidden "Nice." achievement (tap the Nice badge); a photo                       // v1.4.2: shop-only (Nico), owned as "av:jerry"; a photo, not pixel art
+  { id: "smug", lv: 999, ach: "NICE_TAP", name: "Smug" },                // v1.4.2: hidden: earned with the hidden "Nice." achievement (tap the Nice badge); a photo
+  { id: "catdemon", lv: 999, ach: "GIBBLER", cnt: () => `${Math.min(6, state.feats.gb || 0)}/6`, name: "The Gibbler" },   // v1.4.2: was the level 99 picture "Gibby"; hidden, its tile only shows the click counter; second to last (Nico)
+  { id: "jerry", lv: 999, shop: 1, name: "Jerry" },                    // v1.4.2: shop-only (Nico), owned as "av:jerry"; a photo, not pixel art; last in the list (Nico)
 ];
 const SKINS = [
   { id: "default", lv: 1, name: "Classic" }, { id: "brass", lv: 40, name: "Slot Machine" }, { id: "office", lv: 49, name: "Office" },
@@ -2536,7 +2536,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "37776adb3d5a";                                  // filled in by build_site.py
+const BUILD = "dfa4e71bae66";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
