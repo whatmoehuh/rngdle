@@ -823,3 +823,58 @@ grant execute on function public.rng_auto_start(text, text, text) to anon, authe
 -- This release needs everyone on v1.4.1 or newer.
 update public.rng_meta set min_ver = greatest(min_ver, 10401) where id;
 notify pgrst, 'reload schema';
+
+-- ============================================================
+-- RNGdle Pocket v1.4.2 (17.11.2026): weaker faster-roll upgrades at levels 75 and 99.
+--   cooldown 10 s · 9 s from level 50 · 8.25 s from level 75 · 7.75 s from level 99 (was 8 s / 7 s),
+--   −1 s with Overclock (fastest 6.75 s), and half of that while a party is on.
+-- Must match PERKS in app_template.html. Safe to run twice.
+
+create or replace function public.rng_roll(p_token text, p_ver int default null, p_rev int default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  xp numeric;
+  oc boolean;
+  cd interval;
+  nxt timestamptz;
+  rigged int;
+  pi json;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if p_ver < (select min_ver from public.rng_meta) then raise exception 'update_required'; end if;   -- p_ver null = a v1.4.0 page: still allowed to roll
+  if p_rev < coalesce((select (data ->> 'rev')::int from public.rng_saves where account_id = a), 0) then
+    return json_build_object('ok', false, 'stale', true);                       -- another copy saved since: load that first (no cooldown used)
+  end if;
+  pi := public.rng_party_info(a);
+  nxt := (select next_roll_at from public.rng_accounts where id = a);
+  if nxt > now() then
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  xp := coalesce((select case when jsonb_typeof(data -> 'xp') = 'number' then (data ->> 'xp')::numeric end
+                    from public.rng_saves where account_id = a), 0);
+  oc := coalesce((select (data -> 'shop' ->> 'oc') = '1' from public.rng_saves where account_id = a), false);
+  cd := case when xp >= 565000000 then interval '7.75 seconds'   -- level 99
+             when xp >= 118000000 then interval '8.25 seconds'   -- level 75
+             when xp >= 22100000  then interval '9 seconds'      -- level 50
+             else interval '10 seconds' end;
+  if oc then cd := cd - interval '1 second'; end if;                                   -- Overclock (shop)
+  if coalesce((select party_until > now() from public.rng_meta), false) then cd := cd / 2; end if;   -- Party Potion (shop)
+  update public.rng_accounts set next_roll_at = now() + cd where id = a and next_roll_at <= now();
+  if not found then                                              -- another roll got there first
+    nxt := (select next_roll_at from public.rng_accounts where id = a);
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  rigged := (select number from public.rng_pranks where account_id = a and remaining > 0);
+  if rigged is not null then                                     -- owner prank: fixed number, doesn't count
+    update public.rng_pranks set remaining = remaining - 1 where account_id = a;
+    return json_build_object('ok', true, 'number', rigged, 'free', true, 'wait_ms', ceil(extract(epoch from cd) * 1000), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int, 'wait_ms', ceil(extract(epoch from cd) * 1000), 'party', pi -> 'party', 'joined', pi -> 'joined');
+end $$;
+revoke all on function public.rng_roll(text, int, int) from public;
+grant execute on function public.rng_roll(text, int, int) to anon, authenticated;
+
+-- This release needs everyone on v1.4.2 or newer (old pages would still sell at the old prices).
+update public.rng_meta set min_ver = greatest(min_ver, 10402) where id;
+notify pgrst, 'reload schema';
