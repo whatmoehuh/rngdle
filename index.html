@@ -681,7 +681,7 @@ img { max-width: 100%; }
 
 /* ================= leveling (test build) ================= */
 .brand { flex: none; }
-.hright { display: flex; align-items: center; gap: 10px; min-width: 0; flex: 1 1 auto; }
+.hright { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
 .lvchip { flex: none; width: 42px; height: 42px; border-radius: 12px; background: var(--panel); display: grid; place-items: center; align-content: center; gap: 1px;
   border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: 0 0 18px -8px color-mix(in srgb, var(--accent) 80%, transparent); line-height: 1; }
 .lvchip small { font-size: 8.5px; font-weight: 700; letter-spacing: .16em; color: var(--muted); }
@@ -696,6 +696,9 @@ img { max-width: 100%; }
 .cog { flex: none; width: 38px; height: 38px; border-radius: 50%; border: 1px solid var(--line); background: var(--panel); color: var(--muted); display: grid; place-items: center; }
 .cog:active { background: var(--card); color: var(--fg); }
 .cog svg { width: 19px; height: 19px; }
+#b-mute .snd-off, #b-mute[aria-pressed="true"] .snd-on { display: none; }
+#b-mute[aria-pressed="true"] .snd-off { display: inline; }
+#b-mute[aria-pressed="true"] { color: var(--fg); }
 /* v1.5: profile button = your own picture; profile sheet with Stats / Customize */
 .pfbtn { position: relative; padding: 0; overflow: visible; }
 .pfbtn img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; image-rendering: pixelated; }
@@ -1587,6 +1590,8 @@ body.rolling .bg-prism .fanw { opacity: 1; }
         <div class="prog-line"><span><b id="h-xp">0</b> XP</span><span id="h-pct">0%</span></div>
         <div class="bar xpbar" id="h-xpbar" role="progressbar" aria-label="XP to the next level" aria-valuemin="0" aria-valuemax="100"><i id="h-bar" style="width:0%"></i></div>
       </div>
+      <button class="cog" id="b-mute" aria-label="Mute" aria-pressed="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 9.5h3.2L12 5.5v13l-4.8-4H4z" fill="currentColor" stroke="none"/><g class="snd-on"><path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18.3 6.5a7.5 7.5 0 0 1 0 11"/></g><g class="snd-off"><path d="M16 9.5l5 5M21 9.5l-5 5"/></g></svg></button>
+      <button class="cog" id="b-opts" aria-label="Settings" aria-haspopup="dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></button>
       <button class="cog pfbtn" id="b-settings" aria-label="Profile" aria-haspopup="dialog"><img id="h-av" alt=""><i class="newdot" id="stats-dot" hidden></i></button>
     </div>
   </header>
@@ -1706,7 +1711,6 @@ body.rolling .bg-prism .fanw { opacity: 1; }
       <div class="seg pfseg" role="tablist" aria-label="Profile">
         <button role="tab" data-pt="stats" aria-selected="true">Stats</button>
         <button role="tab" data-pt="custom" aria-selected="false">Customize</button>
-        <button role="tab" data-pt="set" aria-selected="false">Settings</button>
       </div>
       <div class="chips pfcats" id="pf-cats" hidden>
         <button class="chip" data-pc="av" aria-pressed="true">Picture</button>
@@ -2684,7 +2688,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "2faac606d48f";                                  // filled in by build_site.py
+const BUILD = "212403ad4497";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -4205,7 +4209,10 @@ function setPf(tab, cat) {
   $("pf-cats").hidden = !custom; $("pf-custom").hidden = !custom; $("pf-stats").hidden = pfTab !== "stats"; $("pf-set").hidden = pfTab !== "set";
   for (const c of ["av", "fr", "skin", "bg", "ds", "name"]) $("pc-" + c).hidden = c !== pfCat;
   if (pfTab === "stats" && dirtyViews.has("stats")) renderView("stats");
-  if (pfTab === "set") renderSound();
+  const opts = pfTab === "set";                                           // 19.11. hotfix: Settings has its own header button; the Profile has no Settings tab
+  $("set-title").textContent = opts ? "Settings" : "Profile"; $("set-sub").hidden = $("set-card").hidden = opts;
+  document.querySelector(".pfnav").hidden = opts;
+  if (opts) renderSound();
 }
 function openSettings(tab, cat) {
   boscoPics = null; coinSprites = null;                                  // v1.4.2: lets the phone drop the decoded Gold Coin pictures (v1.5: ~42 MB of frames, at most 2 pictures in use at once) while settings are open
@@ -4217,7 +4224,8 @@ function closeSettings() {
   if (setReturn && setReturn.focus) setReturn.focus();
   flobBack(); boscoBack();
 }
-$("b-settings").addEventListener("click", () => openSettings());
+$("b-settings").addEventListener("click", () => openSettings(pfTab === "set" ? "stats" : null));
+$("b-opts").addEventListener("click", () => openSettings("set"));
 $("set-x").addEventListener("click", closeSettings);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("settings").hidden && $("patch").hidden) closeSettings(); });
 $("settings").addEventListener("click", (e) => {
@@ -4626,21 +4634,23 @@ const VOL_FX = "rngdle-vol-fx", VOL_MUS = "rngdle-vol-mus";
 function loadVol(k, d) { try { const v = localStorage.getItem(k); return v == null || isNaN(+v) ? d : Math.max(0, Math.min(100, +v)); } catch (e) { return d; } }
 let fxVol = loadVol(VOL_FX, (() => { try { return localStorage.getItem("rngdle-sfx") === "0" ? 0 : 80; } catch (e) { return 80; } })());   // old On/Off switch carries over
 let musVol = loadVol(VOL_MUS, 0);                                       // music starts off
+let muted = (() => { try { return localStorage.getItem("rngdle-mute") === "1"; } catch (e) { return false; } })();   // 19.11. hotfix: header mute button (all sound, per device)
+const fxOn = () => muted ? 0 : fxVol;
 const volGain = (v) => Math.pow(v / 100, 1.6);
 const sfxOwn = () => !!(typeof state !== "undefined" && state && state.shop && state.shop.sfx);   // v1.5 shop items: roll sounds (5) and music (10)
 const musOwn = () => !!(typeof state !== "undefined" && state && state.shop && state.shop.mus);
-const musOn = () => musOwn() ? musVol : 0;                          // slider → gain, roughly even steps to the ear
+const musOn = () => musOwn() && !muted ? musVol : 0;                          // slider → gain, roughly even steps to the ear
 let actx = null, noiseBuf = null, fxGain = null;
 function audio() {
   if (!actx) { const C = window.AudioContext || window.webkitAudioContext; if (!C) return null; try { actx = new C(); } catch (e) { return null; } }
   if (actx.state !== "running" && actx.state !== "closed") actx.resume().catch(() => {});
   return actx;
 }
-function fxBus(c) { if (!fxGain) { fxGain = c.createGain(); fxGain.connect(c.destination); } fxGain.gain.value = volGain(fxVol); return fxGain; }
+function fxBus(c) { if (!fxGain) { fxGain = c.createGain(); fxGain.connect(c.destination); } fxGain.gain.value = volGain(fxOn()); return fxGain; }
 document.addEventListener("pointerdown", () => {                         // phones only allow sound after a tap
-  if (!fxVol && !musOn()) return;
+  if (!fxOn() && !musOn()) return;
   const c = audio(); if (!c) return;
-  if (fxVol) { boomDecode(c); if (sfxOwn()) swooshDecode(c); }
+  if (fxOn()) { boomDecode(c); if (sfxOwn()) swooshDecode(c); }
   if (musOn()) musUpdate();
 }, { capture: true, passive: true });
 function noise(c) {
@@ -4653,7 +4663,7 @@ function env(c, t, peak, len) { const g = c.createGain(); g.gain.setValueAtTime(
 /** One digit locks in: a thocky mechanical-keyboard press (soft keycap tick + hollow low "thock" + a little thump).
     Every press is slightly different, like real keys; the last digit bottoms out harder. */
 function sfxClick(i, last) {
-  if (!fxVol || !sfxOwn() || document.hidden) return;
+  if (!fxOn() || !sfxOwn() || document.hidden) return;
   const c = audio(); if (!c || c.state !== "running") return;
   const t = c.currentTime + 0.004, out = fxBus(c), j = 1 + (Math.random() - 0.5) * 0.1, k = last ? 1.3 : 1;
   const nz = (f) => { const b = c.createBufferSource(); b.buffer = noise(c); b.start(t, Math.random() * 0.5, f); return b; };
@@ -4688,13 +4698,13 @@ function swooshDecode(c) {
   return swLoading;
 }
 function sfxSwoosh() {
-  if (!fxVol || !sfxOwn() || document.hidden) return;
+  if (!fxOn() || !sfxOwn() || document.hidden) return;
   const c = audio(); if (!c || c.state !== "running") return;
   const play = (b) => { if (!b) return; const src = c.createBufferSource(), g = c.createGain(); g.gain.value = 0.8; src.buffer = b; src.connect(g).connect(fxBus(c)); src.start(); };
   if (swBuf) play(swBuf); else swooshDecode(c).then(play);
 }
 function sfxBoom() {
-  if (!fxVol) return;
+  if (!fxOn()) return;
   const c = audio(); if (!c || c.state !== "running") return;
   const play = (b) => { if (!b) return; const src = c.createBufferSource(), g = c.createGain(); g.gain.value = 0.9; src.buffer = b; src.connect(g).connect(fxBus(c)); src.start(); };
   if (boomBuf) play(boomBuf); else boomDecode(c).then(play);
@@ -4762,6 +4772,12 @@ $("v-fx").addEventListener("input", (e) => {
 $("v-mus").addEventListener("input", (e) => { musVol = +e.target.value; if (musVol) audio(); renderSound(); musUpdate(0.25); });
 for (const [id, key] of [["v-fx", VOL_FX], ["v-mus", VOL_MUS]])
   $(id).addEventListener("change", (e) => { try { localStorage.setItem(key, e.target.value); localStorage.removeItem("rngdle-sfx"); } catch (x) {} if (id === "v-fx" && fxVol) sfxClick(5, true); });
+function renderMute() { const b = $("b-mute"); b.setAttribute("aria-pressed", String(muted)); b.setAttribute("aria-label", muted ? "Unmute" : "Mute"); }
+$("b-mute").addEventListener("click", () => {
+  muted = !muted; try { localStorage.setItem("rngdle-mute", muted ? "1" : "0"); } catch (e) {}
+  renderMute(); const c = audio(); if (c) { fxBus(c); if (c.state !== "running") c.resume().then(() => musUpdate(0.25)).catch(() => {}); } musUpdate(0.25);
+});
+renderMute();
 renderSound();
 
 /* ---------- v1.5 Mythic message + reactions ----------
