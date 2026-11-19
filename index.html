@@ -2688,7 +2688,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "212403ad4497";                                  // filled in by build_site.py
+const BUILD = "9d02734f7a00";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -4715,12 +4715,13 @@ function sfxBoom() {
 const MUSIC = ["music-1.mp3", "music-2.mp3", "music-3.mp3", "music-4.mp3", "music-5.mp3", "music-6.mp3", "music-7.mp3", "music-8.mp3"];
 const MUS_TRK = "rngdle-mus-trk";
 let musTrk = (() => { try { const v = +localStorage.getItem(MUS_TRK); return v >= 0 && v < MUSIC.length ? v | 0 : 0; } catch (e) { return 0; } })();
-let musEl = null, musGain = null, musBad = false, musDuck = 1, musStop = null, musErr = 0;
+let musEl = null, musGain = null, musBad = false, musDuck = 1, musStop = null, musWait = null, musErr = 0;
 function musEnsure(c) {
   if (musEl || musBad) return musEl;
   const a = new Audio(); a.preload = "auto"; a.setAttribute("playsinline", "");
   a.addEventListener("ended", () => musNext());
-  a.addEventListener("playing", () => { musErr = 0; });
+  a.muted = true;                                                         // 19.11. hotfix: starts muted, unmuted once it is really playing through the
+  a.addEventListener("playing", () => { musErr = 0; setTimeout(() => { a.muted = false; }, 150); });   // fade (no full-volume blip at the start)
   a.addEventListener("error", () => { if (++musErr >= MUSIC.length) { musBad = true; renderSound(); } else musNext(); });   // skip a broken track; all broken → give up
   try { const src = c.createMediaElementSource(a); musGain = c.createGain(); musGain.gain.value = 0; src.connect(musGain).connect(c.destination); }
   catch (e) { musBad = true; renderSound(); return null; }
@@ -4742,10 +4743,16 @@ function musUpdate(fade = 0.8) {
   }
   if (!c || c.state !== "running") return;                               // waits for the next tap
   const a = musEnsure(c); if (!a) return;
-  clearTimeout(musStop);
-  if (a.paused) { musGain.gain.setValueAtTime(0, c.currentTime); a.play().catch(() => {}); }
+  clearTimeout(musStop); clearTimeout(musWait);
+  /* 19.11. hotfix: after a reload the music started very loud on iPhones, then settled. iOS can play the element straight to the
+     speaker while a fresh AudioContext is still starting up, so the first track waits until the context has really run for 0.6 s,
+     then fades in from 0 over 2.5 s. */
+  if (a.paused && c.currentTime < 0.6) { musWait = setTimeout(() => musUpdate(fade), 300); return; }
   const now = c.currentTime, to = volGain(musVol) * 0.6 * musDuck;      // music sits under the effects
-  musGain.gain.cancelScheduledValues(now); musGain.gain.setValueAtTime(musGain.gain.value, now); musGain.gain.linearRampToValueAtTime(to, now + fade);
+  musGain.gain.cancelScheduledValues(now);
+  if (a.paused) { musGain.gain.setValueAtTime(0, now); fade = Math.max(fade, 2.5); a.play().catch(() => {}); }
+  else musGain.gain.setValueAtTime(musGain.gain.value, now);
+  musGain.gain.linearRampToValueAtTime(to, now + fade);
 }
 document.addEventListener("visibilitychange", () => musUpdate(0.5));
 new MutationObserver(() => { const d = document.body.classList.contains("pcin") ? 0.3 : 1; if (d !== musDuck) { musDuck = d; musUpdate(0.6); } })
