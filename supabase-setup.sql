@@ -878,3 +878,104 @@ grant execute on function public.rng_roll(text, int, int) to anon, authenticated
 -- This release needs everyone on v1.4.2 or newer (old pages would still sell at the old prices).
 update public.rng_meta set min_ver = greatest(min_ver, 10402) where id;
 notify pgrst, 'reload schema';
+
+-- ============================================================================
+-- RNGdle v1.5.0: Mythic messages + reactions
+-- A Mythic roll is announced to everyone online (via the 15 s check-in, rng_pulse);
+-- other players can send a reaction (for now only "jerry"), which the roller gets at their next check-in.
+-- Safe to run twice.
+-- ============================================================================
+
+create table if not exists public.rng_events (
+  id         bigserial primary key,
+  at         timestamptz not null default now(),
+  account_id uuid not null references public.rng_accounts(id) on delete cascade,
+  n          int not null check (n between 0 and 1000000),
+  ep         numeric not null,
+  prism      boolean not null default false,
+  roll       int
+);
+alter table public.rng_events enable row level security;
+revoke all on public.rng_events from anon, authenticated;
+create index if not exists rng_events_at on public.rng_events (at);
+
+create table if not exists public.rng_reacts (
+  id         bigserial primary key,
+  at         timestamptz not null default now(),
+  event_id   bigint not null references public.rng_events(id) on delete cascade,
+  from_id    uuid not null references public.rng_accounts(id) on delete cascade,
+  kind       text not null check (kind in ('jerry')),
+  unique (event_id, from_id)
+);
+alter table public.rng_reacts enable row level security;
+revoke all on public.rng_reacts from anon, authenticated;
+revoke all on sequence public.rng_events_id_seq, public.rng_reacts_id_seq from anon, authenticated;
+
+-- The phone announces its own Mythic roll (once per roll number).
+create or replace function public.rng_shout(p_token text, p_n int, p_ep numeric, p_prism boolean default false, p_roll int default null) returns json
+  language plpgsql security definer set search_path = public as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  delete from public.rng_events where at < now() - interval '1 day';
+  if p_roll is not null and exists (select 1 from public.rng_events where account_id = a and roll = p_roll) then return json_build_object('ok', true); end if;
+  insert into public.rng_events (account_id, n, ep, prism, roll) values (a, p_n, coalesce(p_ep, 0), coalesce(p_prism, false), p_roll);
+  return json_build_object('ok', true);
+end $$;
+revoke all on function public.rng_shout(text, int, numeric, boolean, int) from public;
+grant execute on function public.rng_shout(text, int, numeric, boolean, int) to anon, authenticated;
+
+-- React to someone else's announced roll (one reaction per player and roll, within 10 minutes).
+create or replace function public.rng_react(p_token text, p_event bigint, p_kind text default 'jerry') returns json
+  language plpgsql security definer set search_path = public as $$
+declare a uuid := public.rng_session(p_token); owner uuid;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  owner := (select account_id from public.rng_events where id = p_event and at > now() - interval '10 minutes');
+  if owner is null then return json_build_object('ok', false, 'error', 'old'); end if;
+  if owner = a then return json_build_object('ok', false, 'error', 'own'); end if;
+  if p_kind is distinct from 'jerry' then return json_build_object('ok', false, 'error', 'kind'); end if;
+  insert into public.rng_reacts (event_id, from_id, kind) values (p_event, a, p_kind) on conflict (event_id, from_id) do nothing;
+  return json_build_object('ok', true);
+end $$;
+revoke all on function public.rng_react(text, bigint, text) from public;
+grant execute on function public.rng_react(text, bigint, text) to anon, authenticated;
+
+-- Check-in, now also with new Mythic messages (ev, after p_ev) and reactions to my rolls (rx, after p_rx).
+-- p_ev / p_rx null (first check-in of a page): only the current max ids (evmax / rxmax), no old messages.
+drop function if exists public.rng_pulse(text, boolean);
+create or replace function public.rng_pulse(p_token text, p_here boolean default true, p_ev bigint default null, p_rx bigint default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); pi json;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  update public.rng_accounts set last_seen = case when p_here then now() else null end where id = a;
+  if not p_here then return '{}'::json; end if;
+  pi := public.rng_party_info(a);
+  return json_build_object(
+    'rev', (select coalesce((data ->> 'rev')::int, 0) from public.rng_saves where account_id = a),
+    'min_ver', (select min_ver from public.rng_meta where id),
+    'online', coalesce((select json_agg(id) from public.rng_accounts where last_seen > now() - interval '100 seconds'), '[]'::json),
+    'joined', (pi ->> 'joined')::boolean,
+    'party', pi -> 'party',
+    'preq', (select party_req from public.rng_meta where id and party_by = a),      -- id of this player's last party start
+    'areq', (select auto_req from public.rng_accounts where id = a),                -- id of this player's last autoroller start
+    'evmax', (select coalesce(max(id), 0) from public.rng_events),
+    'rxmax', (select coalesce(max(id), 0) from public.rng_reacts),
+    'ev', case when p_ev is null then '[]'::json else coalesce((select json_agg(x order by x.id) from (
+        select e.id, e.account_id as uid, ac.display as by, e.n, e.ep, e.prism
+        from public.rng_events e join public.rng_accounts ac on ac.id = e.account_id
+        where e.id > p_ev and e.account_id <> a and e.at > now() - interval '2 minutes'
+        order by e.id limit 5) x), '[]'::json) end,
+    'rx', case when p_rx is null then '[]'::json else coalesce((select json_agg(y order by y.id) from (
+        select r.id, ac.display as by, r.kind, e.n
+        from public.rng_reacts r join public.rng_events e on e.id = r.event_id join public.rng_accounts ac on ac.id = r.from_id
+        where r.id > p_rx and e.account_id = a and r.at > now() - interval '10 minutes'
+        order by r.id limit 10) y), '[]'::json) end);
+end $$;
+revoke all on function public.rng_pulse(text, boolean, bigint, bigint) from public;
+grant execute on function public.rng_pulse(text, boolean, bigint, bigint) to anon, authenticated;
+
+-- This release needs everyone on v1.5.0 or newer (Mythic messages, new check-in).
+update public.rng_meta set min_ver = greatest(min_ver, 10500) where id;
+notify pgrst, 'reload schema';
