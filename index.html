@@ -710,7 +710,7 @@ img { max-width: 100%; }
 .pfbtn img:not([src]) { visibility: hidden; }
 #patch { z-index: 51; }
 .pfnav { position: sticky; top: -16px; z-index: 3; margin: 0 -16px; padding: 4px 16px 10px; background: var(--panel); display: grid; gap: 10px; border-bottom: 1px solid var(--line); }
-.pfseg { grid-template-columns: repeat(3, 1fr); }
+.pfseg { grid-template-columns: repeat(2, 1fr); }
 .pfcats { gap: 6px; }
 .pfcats .chip { padding: 6px 10px; }
 .pfpane { display: grid; gap: 14px; }
@@ -2927,7 +2927,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "a3bf4f4269d8";                                  // filled in by build_site.py
+const BUILD = "75e0b22cf591";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
