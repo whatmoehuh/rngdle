@@ -979,3 +979,407 @@ grant execute on function public.rng_pulse(text, boolean, bigint, bigint) to ano
 -- This release needs everyone on v1.5.0 or newer (Mythic messages, new check-in).
 update public.rng_meta set min_ver = greatest(min_ver, 10500) where id;
 notify pgrst, 'reload schema';
+
+-- ============================================================================
+-- RNGdle v1.6.0: Raid "The Gibbler" + Prestige (Time Machine) + longer Autorollers + reactions (Hampter, Bobert, Gibbler, Trash rolls)
+-- Gibbler parts are found server-wide (no duplicates). All 6 summon him until next Monday 0:00 (Berlin).
+-- Raid rolls have their own cooldown (Faster Rolls + Overclock, no level perks) and their own board.
+-- Not defeated by Monday 0:00 = he escapes, no loot. Defeated = parts drop again (same week).
+-- Safe to run twice.
+-- ============================================================================
+
+alter table public.rng_accounts add column if not exists next_raid_at timestamptz not null default now();
+
+create table if not exists public.rng_raids (
+  id         bigserial primary key,
+  wk         date not null,                                  -- Monday (Berlin) of the week
+  boss       text not null default 'gibbler',
+  hp         int not null default 20457,                     -- ~5,000 rolls with no upgrades (avg 4.09 dmg/roll)
+  dmg        int not null default 0,                         -- damage done so far (heals lower it, never below 0)
+  starter    uuid references public.rng_accounts(id) on delete set null,   -- found the last part
+  spawned_at timestamptz,
+  ends_at    timestamptz,
+  won_at     timestamptz,
+  final_by   uuid references public.rng_accounts(id) on delete set null
+);
+alter table public.rng_raids alter column hp set default 20457;     -- (Nico 24.11.: 5,000 rolls, was 38094)
+create index if not exists rng_raids_wk on public.rng_raids (wk, id desc);
+alter table public.rng_raids enable row level security;
+
+create table if not exists public.rng_raid_parts (
+  raid_id    bigint not null references public.rng_raids(id) on delete cascade,
+  part       text not null,
+  account_id uuid references public.rng_accounts(id) on delete set null,
+  req        text,
+  at         timestamptz not null default now(),
+  primary key (raid_id, part)
+);
+alter table public.rng_raid_parts enable row level security;
+
+create table if not exists public.rng_raid_fighters (
+  raid_id    bigint not null references public.rng_raids(id) on delete cascade,
+  account_id uuid not null references public.rng_accounts(id) on delete cascade,
+  rolls      int not null default 0,
+  dmg        int not null default 0,
+  best_ep    numeric not null default 0,
+  best_n     int,
+  best_at    timestamptz,
+  primary key (raid_id, account_id)
+);
+alter table public.rng_raid_fighters enable row level security;
+
+create table if not exists public.rng_raid_top (             -- top 25 EP rolls per boss
+  id         bigserial primary key,
+  raid_id    bigint not null references public.rng_raids(id) on delete cascade,
+  account_id uuid not null references public.rng_accounts(id) on delete cascade,
+  n          int not null,
+  ep         numeric not null,
+  at         timestamptz not null default now()
+);
+create index if not exists rng_raid_top_r on public.rng_raid_top (raid_id, ep desc);
+alter table public.rng_raid_top enable row level security;
+
+create or replace function public.rng_wk() returns date language sql stable as $$
+  select date_trunc('week', now() at time zone 'Europe/Berlin')::date $$;
+
+-- The newest raid of this week as json (null if none yet). fight = summoned, not beaten, not over.
+create or replace function public.rng_raid_info(a uuid) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare rid bigint := (select id from public.rng_raids where wk = public.rng_wk() order by id desc limit 1);
+begin
+  if rid is null then return null; end if;
+  return (select json_build_object(
+    'id', r.id, 'boss', r.boss, 'hp', r.hp, 'dmg', r.dmg,
+    'parts', coalesce((select json_agg(p.part order by p.at) from public.rng_raid_parts p where p.raid_id = r.id), '[]'::json),
+    'fight', r.spawned_at is not null and r.won_at is null and now() < r.ends_at,
+    'spawned', case when r.spawned_at is null then null else floor(extract(epoch from r.spawned_at) * 1000) end,
+    'ends', case when r.ends_at is null then null else floor(extract(epoch from r.ends_at) * 1000) end,
+    'won', r.won_at is not null,
+    'starter', (select display from public.rng_accounts where id = r.starter),
+    'beaten', (select count(*) from public.rng_raids x where x.wk = r.wk and x.won_at is not null),
+    'mine', (select json_build_object('rolls', f.rolls, 'dmg', f.dmg) from public.rng_raid_fighters f where f.raid_id = r.id and f.account_id = a))
+    from public.rng_raids r where r.id = rid);
+end $$;
+revoke all on function public.rng_raid_info(uuid) from public, anon, authenticated;
+
+create or replace function public.rng_raid_state(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  return public.rng_raid_info(a);
+end $$;
+revoke all on function public.rng_raid_state(text) from public;
+grant execute on function public.rng_raid_state(text) to anon, authenticated;
+
+-- A part dropped on this phone (1/1000 per roll × Archeologist, only after the weekly server quest is done; the phone checks that).
+-- The server picks one of the missing parts. The 6th part summons the Gibbler. p_req makes a retry safe.
+create or replace function public.rng_raid_part(p_token text, p_req text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  w date := public.rng_wk();
+  rid bigint;
+  pt text;
+  cnt int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  perform pg_advisory_xact_lock(6661);
+  pt := (select part from public.rng_raid_parts where req = p_req and account_id = a);
+  if pt is not null then
+    return json_build_object('ok', true, 'part', pt, 'again', true, 'raid', public.rng_raid_info(a));
+  end if;
+  rid := (select id from public.rng_raids where wk = w order by id desc limit 1);
+  if rid is null or (select won_at is not null from public.rng_raids where id = rid) then
+    insert into public.rng_raids (wk) values (w);
+    rid := (select id from public.rng_raids where wk = w order by id desc limit 1);
+  end if;
+  if (select spawned_at is not null from public.rng_raids where id = rid) then
+    return json_build_object('ok', false, 'raid', public.rng_raid_info(a));      -- he's already here
+  end if;
+  pt := (select x from unnest(array['fart', 'brain', 'beans', 'poop', 'tail', 'head']) x
+         where x not in (select part from public.rng_raid_parts where raid_id = rid) order by random() limit 1);
+  insert into public.rng_raid_parts (raid_id, part, account_id, req) values (rid, pt, a, p_req);
+  cnt := (select count(*) from public.rng_raid_parts where raid_id = rid);
+  if cnt >= 6 then
+    update public.rng_raids set spawned_at = now(), starter = a,
+      ends_at = ((w + 7)::timestamp at time zone 'Europe/Berlin') where id = rid;
+  end if;
+  return json_build_object('ok', true, 'part', pt, 'summoned', cnt >= 6, 'raid', public.rng_raid_info(a));
+end $$;
+revoke all on function public.rng_raid_part(text, text) from public;
+grant execute on function public.rng_raid_part(text, text) to anon, authenticated;
+
+-- A raid roll: own cooldown (10 s − Faster Rolls − Overclock, halved in a party), More Rolls = several numbers
+-- (the phone keeps the best). Upgrade levels come from the save (data.up).
+create or replace function public.rng_raid_roll(p_token text, p_ver int default null, p_rev int default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  sv jsonb;
+  fr int; mr int;
+  cd numeric;
+  nxt timestamptz;
+  k int;
+  u numeric;
+  pi json;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if p_ver < (select min_ver from public.rng_meta) then raise exception 'update_required'; end if;
+  sv := (select data from public.rng_saves where account_id = a);
+  if p_rev < coalesce((sv ->> 'rev')::int, 0) then return json_build_object('ok', false, 'stale', true); end if;
+  if not coalesce((select r.spawned_at is not null and r.won_at is null and now() < r.ends_at
+                   from public.rng_raids r where r.wk = public.rng_wk() order by r.id desc limit 1), false) then
+    return json_build_object('ok', false, 'over', true, 'raid', public.rng_raid_info(a));
+  end if;
+  pi := public.rng_party_info(a);
+  nxt := (select next_raid_at from public.rng_accounts where id = a);
+  if nxt > now() then
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  fr := least(10, greatest(0, coalesce((sv -> 'up' ->> 'fr')::int, 0)));
+  mr := least(10, greatest(0, coalesce((sv -> 'up' ->> 'mr')::int, 0)));
+  cd := 10 - (array[0, 1, 1.5, 2, 2.5, 3.5, 4, 4.5, 5, 6, 7.5])[fr + 1];           -- Faster Rolls I–X
+  if (sv -> 'shop' ->> 'oc') = '1' then cd := cd - 1; end if;                          -- Overclock
+  if coalesce((select party_until > now() from public.rng_meta), false) then cd := cd / 2; end if;   -- Party Potion
+  update public.rng_accounts set next_raid_at = now() + make_interval(secs => cd) where id = a and next_raid_at <= now();
+  if not found then
+    nxt := (select next_raid_at from public.rng_accounts where id = a);
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  -- More Rolls I–X: 25/50/75 % Double · Double · 25/50/75 % Triple · Triple · 50 % Quadruple · 4 rolls
+  u := random();
+  k := case mr when 0 then 1 when 1 then 1 + (u < 0.25)::int when 2 then 1 + (u < 0.5)::int when 3 then 1 + (u < 0.75)::int
+               when 4 then 2 when 5 then 2 + (u < 0.25)::int when 6 then 2 + (u < 0.5)::int when 7 then 2 + (u < 0.75)::int
+               when 8 then 3 when 9 then 3 + (u < 0.5)::int else 4 end;
+  return json_build_object('ok', true,
+    'numbers', (select json_agg(floor(random() * 1000001)::int) from generate_series(1, k)),
+    'wait_ms', ceil(cd * 1000), 'party', pi -> 'party', 'joined', pi -> 'joined');
+end $$;
+revoke all on function public.rng_raid_roll(text, int, int) from public;
+grant execute on function public.rng_raid_roll(text, int, int) to anon, authenticated;
+
+-- The phone scored a raid roll: damage (negative = heal) goes on the boss, the roll on the boss board.
+create or replace function public.rng_raid_hit(p_token text, p_raid bigint, p_n int, p_ep numeric, p_dmg int) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  d int := least(200, greatest(-200, coalesce(p_dmg, 0)));
+  fin boolean := false;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  perform 1 from public.rng_raids where id = p_raid for update;
+  if not coalesce((select spawned_at is not null and won_at is null and now() < ends_at from public.rng_raids where id = p_raid), false) then
+    return json_build_object('ok', false, 'raid', public.rng_raid_info(a));
+  end if;
+  update public.rng_raids set dmg = greatest(0, least(hp, dmg + d)) where id = p_raid;
+  if (select dmg >= hp from public.rng_raids where id = p_raid) then
+    update public.rng_raids set won_at = now(), final_by = a where id = p_raid;
+    fin := true;
+  end if;
+  insert into public.rng_raid_fighters (raid_id, account_id, rolls, dmg, best_ep, best_n, best_at)
+    values (p_raid, a, 1, d, p_ep, p_n, now())
+    on conflict (raid_id, account_id) do update set rolls = rng_raid_fighters.rolls + 1, dmg = rng_raid_fighters.dmg + d,
+      best_ep = greatest(rng_raid_fighters.best_ep, excluded.best_ep),
+      best_n = case when excluded.best_ep > rng_raid_fighters.best_ep then excluded.best_n else rng_raid_fighters.best_n end,
+      best_at = case when excluded.best_ep > rng_raid_fighters.best_ep then excluded.best_at else rng_raid_fighters.best_at end;
+  if (select count(*) < 25 or min(ep) < p_ep from (select ep from public.rng_raid_top where raid_id = p_raid order by ep desc limit 25) t) then
+    insert into public.rng_raid_top (raid_id, account_id, n, ep) values (p_raid, a, p_n, p_ep);
+    delete from public.rng_raid_top where raid_id = p_raid and id not in
+      (select id from public.rng_raid_top where raid_id = p_raid order by ep desc, id limit 25);
+  end if;
+  return json_build_object('ok', true, 'final', fin, 'raid', public.rng_raid_info(a));
+end $$;
+revoke all on function public.rng_raid_hit(text, bigint, int, numeric, int) from public;
+grant execute on function public.rng_raid_hit(text, bigint, int, numeric, int) to anon, authenticated;
+
+-- Boss board: top 25 rolls since he spawned + everyone who fought (rolls, damage).
+create or replace function public.rng_raid_board(p_token text, p_raid bigint) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  return json_build_object(
+    'top', coalesce((select json_agg(json_build_object('uid', t.account_id, 'by', ac.display, 'n', t.n, 'ep', t.ep) order by t.ep desc, t.id)
+                     from public.rng_raid_top t join public.rng_accounts ac on ac.id = t.account_id where t.raid_id = p_raid), '[]'::json),
+    'fighters', coalesce((select json_agg(json_build_object('uid', f.account_id, 'by', ac.display, 'rolls', f.rolls, 'dmg', f.dmg) order by f.dmg desc)
+                     from public.rng_raid_fighters f join public.rng_accounts ac on ac.id = f.account_id where f.raid_id = p_raid), '[]'::json));
+end $$;
+revoke all on function public.rng_raid_board(text, bigint) from public;
+grant execute on function public.rng_raid_board(text, bigint) to anon, authenticated;
+
+-- Loot of beaten bosses (last 14 days) for this player: 1 box for taking part, +1 each for starter (last part),
+-- most rolls, best roll, final hit. The phone keeps which raids it already claimed (save: raid.got).
+create or replace function public.rng_raid_loot(p_token text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  return coalesce((select json_agg(x order by x.id) from (
+    select r.id, r.boss,
+      (exists (select 1 from public.rng_raid_fighters f where f.raid_id = r.id and f.account_id = a) or r.starter = a) as part,
+      r.starter = a as starter,
+      a = (select f.account_id from public.rng_raid_fighters f where f.raid_id = r.id order by f.rolls desc, f.dmg desc limit 1) as most,
+      a = (select f.account_id from public.rng_raid_fighters f where f.raid_id = r.id order by f.best_ep desc, f.best_at limit 1) as best,
+      r.final_by = a as final
+    from public.rng_raids r
+    where r.won_at > now() - interval '14 days'
+      and (r.starter = a or exists (select 1 from public.rng_raid_fighters f where f.raid_id = r.id and f.account_id = a))) x), '[]'::json);
+end $$;
+revoke all on function public.rng_raid_loot(text) from public;
+grant execute on function public.rng_raid_loot(text) to anon, authenticated;
+
+-- Trash rolls are announced too (1.6), so they can be reacted to. rng_pulse below sends e.trash.
+alter table public.rng_events add column if not exists trash boolean not null default false;
+drop function if exists public.rng_shout(text, int, numeric, boolean, int);
+create or replace function public.rng_shout(p_token text, p_n int, p_ep numeric, p_prism boolean default false, p_roll int default null, p_trash boolean default false) returns json
+  language plpgsql security definer set search_path = public as $$
+declare a uuid := public.rng_session(p_token);
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  delete from public.rng_events where at < now() - interval '1 day';
+  if p_roll is not null and exists (select 1 from public.rng_events where account_id = a and roll = p_roll) then return json_build_object('ok', true); end if;
+  insert into public.rng_events (account_id, n, ep, prism, roll, trash) values (a, p_n, coalesce(p_ep, 0), coalesce(p_prism, false), p_roll, coalesce(p_trash, false));
+  return json_build_object('ok', true);
+end $$;
+revoke all on function public.rng_shout(text, int, numeric, boolean, int, boolean) from public;
+grant execute on function public.rng_shout(text, int, numeric, boolean, int, boolean) to anon, authenticated;
+
+-- Check-in: + raid state
+create or replace function public.rng_pulse(p_token text, p_here boolean default true, p_ev bigint default null, p_rx bigint default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); pi json;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  update public.rng_accounts set last_seen = case when p_here then now() else null end where id = a;
+  if not p_here then return '{}'::json; end if;
+  pi := public.rng_party_info(a);
+  return json_build_object(
+    'rev', (select coalesce((data ->> 'rev')::int, 0) from public.rng_saves where account_id = a),
+    'min_ver', (select min_ver from public.rng_meta where id),
+    'online', coalesce((select json_agg(id) from public.rng_accounts where last_seen > now() - interval '100 seconds'), '[]'::json),
+    'joined', (pi ->> 'joined')::boolean,
+    'party', pi -> 'party',
+    'preq', (select party_req from public.rng_meta where id and party_by = a),
+    'areq', (select auto_req from public.rng_accounts where id = a),
+    'evmax', (select coalesce(max(id), 0) from public.rng_events),
+    'rxmax', (select coalesce(max(id), 0) from public.rng_reacts),
+    'raid', public.rng_raid_info(a),
+    'ev', case when p_ev is null then '[]'::json else coalesce((select json_agg(x order by x.id) from (
+        select e.id, e.account_id as uid, ac.display as by, e.n, e.ep, e.prism, e.trash
+        from public.rng_events e join public.rng_accounts ac on ac.id = e.account_id
+        where e.id > p_ev and e.account_id <> a and e.at > now() - interval '2 minutes'
+        order by e.id limit 5) x), '[]'::json) end,
+    'rx', case when p_rx is null then '[]'::json else coalesce((select json_agg(y order by y.id) from (
+        select r.id, ac.display as by, r.kind, e.n
+        from public.rng_reacts r join public.rng_events e on e.id = r.event_id join public.rng_accounts ac on ac.id = r.from_id
+        where r.id > p_rx and e.account_id = a and r.at > now() - interval '10 minutes'
+        order by r.id limit 10) y), '[]'::json) end);
+end $$;
+revoke all on function public.rng_pulse(text, boolean, bigint, bigint) from public;
+grant execute on function public.rng_pulse(text, boolean, bigint, bigint) to anon, authenticated;
+
+-- Prestige (Time Machine): max level 90 + data.pres (up to 100); the phone sets XP to 0, everything reached stays.
+-- Cooldown by highest level ever reached (= max(level, 89 + pres)): 10 s · 9 s lv 50 · 8.25 s lv 75 · −0.1 s per level 90–99
+-- · 6.25 s lv 100 (the lv 99 perk is gone) · −1 s Overclock · half in a party. Must match lvCd() / PERKS in app_template.html.
+create or replace function public.rng_roll(p_token text, p_ver int default null, p_rev int default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  sv jsonb;
+  xp numeric;
+  pr int;
+  lv int;
+  ms int;
+  cd interval;
+  nxt timestamptz;
+  rigged int;
+  pi json;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if p_ver < (select min_ver from public.rng_meta) then raise exception 'update_required'; end if;
+  sv := (select data from public.rng_saves where account_id = a);
+  if p_rev < coalesce((sv ->> 'rev')::int, 0) then
+    return json_build_object('ok', false, 'stale', true);                       -- another copy saved since: load that first (no cooldown used)
+  end if;
+  pi := public.rng_party_info(a);
+  nxt := (select next_roll_at from public.rng_accounts where id = a);
+  if nxt > now() then
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  xp := case when jsonb_typeof(sv -> 'xp') = 'number' then (sv ->> 'xp')::numeric else 0 end;
+  pr := case when jsonb_typeof(sv -> 'pres') = 'number' then least(10, greatest(0, floor((sv ->> 'pres')::numeric)::int)) else 0 end;
+  lv := (select count(*) from unnest(array[22100000, 118000000, 312000000, 333000000, 356000000, 380000000, 406000000, 433000000,
+                                           463000000, 495000000, 529000000, 565000000, 604000000]) t where xp >= t);
+  lv := (array[1, 50, 75, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100])[lv + 1];    -- only the levels that change the speed
+  lv := least(lv, 90 + pr);                                                         -- level cap
+  if pr > 0 then lv := greatest(lv, 89 + pr); end if;                              -- highest level ever reached
+  ms := case when lv >= 100 then 6250 when lv >= 90 then 8250 - 100 * (lv - 89) when lv >= 75 then 8250 when lv >= 50 then 9000 else 10000 end;
+  if (sv -> 'shop' ->> 'oc') = '1' then ms := ms - 1000; end if;                       -- Overclock (shop)
+  cd := make_interval(secs => ms / 1000.0);
+  if coalesce((select party_until > now() from public.rng_meta), false) then cd := cd / 2; end if;   -- Party Potion (shop)
+  update public.rng_accounts set next_roll_at = now() + cd where id = a and next_roll_at <= now();
+  if not found then                                              -- another roll got there first
+    nxt := (select next_roll_at from public.rng_accounts where id = a);
+    return json_build_object('ok', false, 'wait_ms', greatest(0, ceil(extract(epoch from nxt - now()) * 1000)), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  rigged := (select number from public.rng_pranks where account_id = a and remaining > 0);
+  if rigged is not null then                                     -- owner prank: fixed number, doesn't count
+    update public.rng_pranks set remaining = remaining - 1 where account_id = a;
+    return json_build_object('ok', true, 'number', rigged, 'free', true, 'wait_ms', ceil(extract(epoch from cd) * 1000), 'party', pi -> 'party', 'joined', pi -> 'joined');
+  end if;
+  return json_build_object('ok', true, 'number', floor(random() * 1000001)::int, 'wait_ms', ceil(extract(epoch from cd) * 1000), 'party', pi -> 'party', 'joined', pi -> 'joined');
+end $$;
+revoke all on function public.rng_roll(text, int, int) from public;
+grant execute on function public.rng_roll(text, int, int) to anon, authenticated;
+
+-- Autoroller (1.6): 1 h (a roll every 30 s = 120 rolls), Autoroller XL 4 h (a roll every minute = 240 rolls). Was 15 min / 1 h.
+-- Same as v1.4.1 otherwise: one step, same p_req again = the same run, not while the last run still has uncollected rolls.
+create or replace function public.rng_auto_start(p_token text, p_kind text default 'xl', p_req text default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); stp int; mx int; r public.rng_accounts;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  r := (select x from public.rng_accounts x where x.id = a);
+  if p_req is not null and r.auto_req = p_req then                 -- asked again after a lost answer: it's already running
+    return json_build_object('left_ms', greatest(0, ceil(extract(epoch from r.auto_until - now()) * 1000)));
+  end if;
+  if r.auto_start is not null and r.auto_done < least(r.auto_max, floor(extract(epoch from least(now(), r.auto_until) - r.auto_start) / r.auto_step)::int)
+     and r.auto_until <= now() then
+    raise exception 'auto_unclaimed';                                -- collect the last run's rolls first (rng_auto_claim)
+  end if;
+  stp := case when p_kind = 'std' then 30 else 60 end;
+  mx  := case when p_kind = 'std' then 120 else 240 end;
+  update public.rng_accounts set auto_start = now(), auto_until = now() + stp * mx * interval '1 second',
+         auto_step = stp, auto_max = mx, auto_done = 0, auto_req = p_req
+   where id = a and (auto_until is null or auto_until <= now());     -- one step: two starts at once can't both get through
+  if not found then raise exception 'auto_running'; end if;
+  return json_build_object('left_ms', stp * mx * 1000);
+end $$;
+revoke all on function public.rng_auto_start(text, text, text) from public;
+grant execute on function public.rng_auto_start(text, text, text) to anon, authenticated;
+
+-- Reactions (1.6): Jerry, Hampter, Bobert (everyone), Gibbler (raid loot: needs "rx:gibbler" in the save's owned list).
+alter table public.rng_reacts drop constraint if exists rng_reacts_kind_check;
+alter table public.rng_reacts add constraint rng_reacts_kind_check check (kind in ('jerry', 'hampter', 'bobert', 'gibbler'));
+create or replace function public.rng_react(p_token text, p_event bigint, p_kind text default 'jerry') returns json
+  language plpgsql security definer set search_path = public as $$
+declare a uuid := public.rng_session(p_token); owner uuid;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  owner := (select account_id from public.rng_events where id = p_event and at > now() - interval '10 minutes');
+  if owner is null then return json_build_object('ok', false, 'error', 'old'); end if;
+  if owner = a then return json_build_object('ok', false, 'error', 'own'); end if;
+  if p_kind is null or p_kind not in ('jerry', 'hampter', 'bobert', 'gibbler') then return json_build_object('ok', false, 'error', 'kind'); end if;
+  if p_kind = 'gibbler' and not coalesce((select (data -> 'owned') ? ('rx:' || p_kind) from public.rng_saves where account_id = a), false) then
+    return json_build_object('ok', false, 'error', 'kind');
+  end if;
+  insert into public.rng_reacts (event_id, from_id, kind) values (p_event, a, p_kind) on conflict (event_id, from_id) do nothing;
+  return json_build_object('ok', true);
+end $$;
+revoke all on function public.rng_react(text, bigint, text) from public;
+grant execute on function public.rng_react(text, bigint, text) to anon, authenticated;
+
+-- This release needs everyone on v1.6.0 or newer.
+update public.rng_meta set min_ver = greatest(min_ver, 10600) where id;
+notify pgrst, 'reload schema';
