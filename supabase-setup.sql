@@ -1383,3 +1383,29 @@ grant execute on function public.rng_react(text, bigint, text) to anon, authenti
 -- This release needs everyone on v1.6.0 or newer.
 update public.rng_meta set min_ver = greatest(min_ver, 10600) where id;
 notify pgrst, 'reload schema';
+
+-- ============================================================================
+-- RNGdle Pocket v1.6.1 (part 1): who found each Gibbler part.
+-- rng_raid_info gets 'found' = { part: { by, uid } }. Old app versions ignore it. Safe to run twice.
+-- ============================================================================
+
+create or replace function public.rng_raid_info(a uuid) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare rid bigint := (select id from public.rng_raids where wk = public.rng_wk() order by id desc limit 1);
+begin
+  if rid is null then return null; end if;
+  return (select json_build_object(
+    'id', r.id, 'boss', r.boss, 'hp', r.hp, 'dmg', r.dmg,
+    'parts', coalesce((select json_agg(p.part order by p.at) from public.rng_raid_parts p where p.raid_id = r.id), '[]'::json),
+    'found', coalesce((select json_object_agg(p.part, json_build_object('by', ac.display, 'uid', p.account_id)) from public.rng_raid_parts p
+                       left join public.rng_accounts ac on ac.id = p.account_id where p.raid_id = r.id), '{}'::json),
+    'fight', r.spawned_at is not null and r.won_at is null and now() < r.ends_at,
+    'spawned', case when r.spawned_at is null then null else floor(extract(epoch from r.spawned_at) * 1000) end,
+    'ends', case when r.ends_at is null then null else floor(extract(epoch from r.ends_at) * 1000) end,
+    'won', r.won_at is not null,
+    'starter', (select display from public.rng_accounts where id = r.starter),
+    'beaten', (select count(*) from public.rng_raids x where x.wk = r.wk and x.won_at is not null),
+    'mine', (select json_build_object('rolls', f.rolls, 'dmg', f.dmg) from public.rng_raid_fighters f where f.raid_id = r.id and f.account_id = a))
+    from public.rng_raids r where r.id = rid);
+end $$;
+revoke all on function public.rng_raid_info(uuid) from public, anon, authenticated;
