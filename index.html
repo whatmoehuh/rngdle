@@ -2927,7 +2927,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "27c56a26b13c";                                  // filled in by build_site.py
+const BUILD = "a3bf4f4269d8";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -5225,11 +5225,11 @@ function renderQuests() {
     return `<div class="shoprow"><span class="ic">${typeof it.ic === "function" ? it.ic() : it.ic || it.e}</span><span class="cn">${esc(it.n)}${it.d ? `<small>${esc(it.d)}</small>` : ""}${have && !it.toggle ? `<em>${esc(have)}</em>` : ""}</span>${btn}</div>`;
   };
   const cat = (title, items) => `<div class="shopcat">${title}</div><div class="rows shop">${items.map(shopRow).join("")}</div>`;
-  // v1.6: three tabs. Overclock (and the Time Machine) sit apart from the raid upgrades.
+  // v1.6: three tabs. Overclock sits apart from the raid upgrades; the Time Machine is under Consumables → Tools (hotfix 24.11.).
   const inv = Object.keys(INV).filter((k) => state.inv[k] > 0).map((k) => `<div class="shoprow"><span class="ic">${INV[k].e}</span><span class="cn">${esc(INV[k].n)}<em>×${fmt(state.inv[k])}</em></span><button class="btn2 small buy" data-use="${k}">Use</button></div>`).join("");
   const tabs = `<div class="chips shoptabs">${SHOP_TABS.map(([id, n]) => `<button class="chip" data-stab="${id}" aria-pressed="${shopTab === id}">${n}</button>`).join("")}</div>`;
-  const shop = tabs + (shopTab === "up" ? cat("⚔️ RAID", UPG_SHOP) + `<div class="shopsep"></div>` + cat("🔧 ALWAYS", SHOP.filter((x) => x.id === "oc" || x.cat === "gear"))
-    : shopTab === "con" ? (inv ? `<div class="shopcat">🎁 LOOT</div><div class="rows shop">${inv}</div>` : "") + cat("⚡ BOOSTS", SHOP.filter((x) => x.cat === "boost" && x.id !== "oc")) + cat("🧰 TOOLS", SHOP.filter((x) => x.cat === "tool"))
+  const shop = tabs + (shopTab === "up" ? cat("⚔️ RAID", UPG_SHOP) + `<div class="shopsep"></div>` + cat("🔧 PERMANENT", SHOP.filter((x) => x.id === "oc"))
+    : shopTab === "con" ? (inv ? `<div class="shopcat">🎁 LOOT</div><div class="rows shop">${inv}</div>` : "") + cat("⚡ BOOSTS", SHOP.filter((x) => x.cat === "boost" && x.id !== "oc")) + cat("🧰 TOOLS", SHOP.filter((x) => x.cat === "tool" || x.cat === "gear"))
     : cat("🎵 SOUND", SHOP.filter((x) => x.cat === "sound")) + cat("🖼️ FRAMES", FRAME_SHOP) + cat("😼 PICTURES", AV_SHOP)),
     prismShop = PRISM_SHOP.map(shopRow).join(""), what = cat("❓ ???", SHOP.filter((x) => x.cat === "what"));
   $("quests-box").innerHTML =
@@ -5298,7 +5298,7 @@ const ROMAN = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII", "IX", "X"];
 const UPG = {
   w: { n: "Weapon", names: ["Stick", "Wooden Sword", "Iron Sword", "Battle Axe", "War Hammer", "Magic Spear", "Gibbler Claw", "Boscomobile"], ics: ["🪵", "🗡️", "⚔️", "🪓", "🔨", "🔱", "🐾", "🏎️"],
     val: [1, 2, 3, 4, 5, 7, 10, 15], price: [2, 50, 100, 200, 450, 900, 2000, 4000], txt: (v) => `+${v} damage` },
-  mr: { n: "More Rolls", e: "🎰", val: ["25% Double Time", "50% Double Time", "75% Double Time", "Double Time", "25% Triple Time", "50% Triple Time", "75% Triple Time", "Triple Time", "50% Quadruple Time", "Quadruple Time"],
+  mr: { n: "More Rolls", e: "🎰", val: ["25% to roll 2 times and use the better of the two rolls", "50% to roll 2 times and use the better of the two rolls", "75% to roll 2 times and use the better of the two rolls", "Roll 2 times and use the better of the two rolls", "25% to roll 3 times and use the best of the three rolls", "50% to roll 3 times and use the best of the three rolls", "75% to roll 3 times and use the best of the three rolls", "Roll 3 times and use the best of the three rolls", "50% to roll 4 times and use the best of the four rolls", "Roll 4 times and use the best of the four rolls"],
     price: [75, 125, 200, 300, 500, 800, 1250, 2000, 3500, 5000], txt: (v) => v },
   fr: { n: "Faster Rolls", e: "⏩", val: [1, 1.5, 2, 2.5, 3.5, 4, 4.5, 5, 6, 7.5], price: [75, 125, 200, 300, 500, 800, 1250, 2000, 3500, 5000], txt: (v) => `−${v} s raid cooldown` },
   ar: { n: "Archeologist", e: "⛏️", val: [50, 100, 200, 300, 400, 500, 600, 700, 800, 1000], price: [50, 75, 125, 175, 300, 450, 700, 1100, 1600, 2500], txt: (v) => `+${v}% part chance` },
