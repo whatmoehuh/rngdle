@@ -3000,7 +3000,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "3cdfdf473116";                                  // filled in by build_site.py
+const BUILD = "ab9fdae99a12";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -5442,7 +5442,7 @@ const SHOP_TABS = [["cus", "Customization"], ["up", "Upgrades"], ["con", "Consum
 // All 6 summon him until Monday 0:00. Raid rolls: own cooldown, best of More Rolls, free digit reroll, XP max 1M, no leaderboards.
 const PARTS = { fart: ["💨", "Fart"], brain: ["🌰", "Brain"], beans: ["🫘", "Beans"], poop: ["💩", "Poop"], tail: ["➰", "Tail"], head: ["👹", "Head"] };
 const PART_PRIZE = 50;                          // v1.6.1: prisms for finding a part
-const RAID_DMG = { TRASH: 5, COMMON: 1, UNCOMMON: 3, RARE: 5, EPIC: 10, ANOMALY: 25, MYTHIC: 50 }, RAID_PRISM_DMG = 100, RAID_XP_CAP = 1000000, PART_P = 0.002;
+const RAID_DMG = { TRASH: 5, COMMON: 1, UNCOMMON: 3, RARE: 5, EPIC: 10, ANOMALY: 25, MYTHIC: 50 }, RAID_PRISM_DMG = 100, RAID_XP_CAP = 1000000, PART_P = 0.001;
 var raid = null, raidMode = false;              // var: effBg() / perk() may ask before this line runs
 let raidCd = { until: 0, total: 1 }, partBusy = false, raidBoard = null, raidBoardOpen = false, raidLoot = null, lootBusy = false, summoning = false;
 const partKey = () => lsKey + ":part";
