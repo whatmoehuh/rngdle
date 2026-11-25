@@ -3000,7 +3000,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "ab9fdae99a12";                                  // filled in by build_site.py
+const BUILD = "17feb34d3672";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -3971,12 +3971,12 @@ function renderStats() {
     ["BEST ROLL", best ? String(best.number) : "–", best ? `${fmt(best.ep)} EP` : "", best ? cvar(best.tier) : ""],
     ["BADGES FOUND", `${discovered()} / ${TOTAL_BADGES}`, "", "var(--accent)"],
   ].map(([k, v, s, c]) => `<div class="tilestat"><div class="k">${k}</div><div class="v"${c ? ` style="color:${c}"` : ""}>${v}</div>${s ? `<div class="s">${s}</div>` : ""}</div>`).join("");
-  const mx = Math.max(1, ...RARITY_ORDER.map((t) => d.tier_counts[t] || 0));
+  const mx = Math.max(1, ...RARITY_ORDER.map((t) => d.tier_counts[t] || 0)), tn = RARITY_ORDER.reduce((t, k) => t + (d.tier_counts[k] || 0), 0);   // % of counted rolls (1.6.0 saves also counted raid rolls)
   $("tierbars").innerHTML = RARITY_ORDER.map((t) => {
     const c = d.tier_counts[t] || 0;
     return `<div class="tbar"><span class="t" style="color:${cvar(t)}">${t[0] + t.slice(1).toLowerCase()}</span>` +
       `<span class="track"><i style="width:${c ? Math.max(2, 100 * c / mx) : 0}%;background:${cvar(t)}"></i></span>` +
-      `<span class="c">${fmt(c)} · ${d.rolls ? (100 * c / d.rolls).toFixed(1) : "0.0"}%</span></div>`;
+      `<span class="c">${fmt(c)} · ${tn ? (100 * c / tn).toFixed(1) : "0.0"}%</span></div>`;
   }).join("");
   renderScores();
   setSync(syncState);
@@ -5668,8 +5668,7 @@ function updateHud() {
 }
 /** Like record(), for raid rolls: XP (max 1M), badges, quests, luck stats. No leaderboard lists, no roll count, no streak, no weekly. */
 function recordRaid(n, total, tier, rows) {
-  const lvBefore = level();
-  state.tier_counts[tier] = (state.tier_counts[tier] || 0) + 1;
+  const lvBefore = level();   // raid rolls stay out of tier_counts (the Stats % bars are per normal roll)
   const newIds = new Set();
   for (const r of rows) { const c = state.badge_counts[r.b.id] || 0; if (!c) newIds.add(r.b.id); state.badge_counts[r.b.id] = c + 1; }
   const paid = new Set(state.xp_found), firstXp = new Set(); let bonus = 0;
