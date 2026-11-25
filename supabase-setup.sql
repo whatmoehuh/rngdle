@@ -1409,3 +1409,33 @@ begin
     from public.rng_raids r where r.id = rid);
 end $$;
 revoke all on function public.rng_raid_info(uuid) from public, anon, authenticated;
+
+-- ============================================================================
+-- RNGdle Pocket hotfix 25.11.: the Gibbler gets ×1.8 HP for every time he was beaten (all weeks).
+-- HP = 20,457 × 1.8^(Gibbler wins so far): 1st 20,457 · 2nd 36,823 · 3rd 66,281 · 4th 119,306 · 5th 214,750 …
+-- Done by a trigger on new raids, so it works with the 1.6 and 1.7 functions alike (Bosco unchanged).
+-- Also fixes the HP of this week's Gibbler that isn't beaten yet (parts being collected or already summoned).
+-- No app update needed. Safe to run twice.
+-- ============================================================================
+
+create or replace function public.rng_gibbler_hp() returns int
+  language sql stable security definer set search_path = public as $$
+  select least(2000000000, round(20457 * power(1.8, (select count(*) from public.rng_raids where boss = 'gibbler' and won_at is not null))))::int $$;
+revoke all on function public.rng_gibbler_hp() from public, anon, authenticated;
+
+create or replace function public.rng_raids_hp() returns trigger
+  language plpgsql security definer set search_path = public as $$
+begin
+  if new.boss = 'gibbler' then new.hp := public.rng_gibbler_hp(); end if;
+  return new;
+end $$;
+revoke all on function public.rng_raids_hp() from public, anon, authenticated;
+
+drop trigger if exists rng_raids_hp on public.rng_raids;
+create trigger rng_raids_hp before insert on public.rng_raids for each row execute function public.rng_raids_hp();
+
+-- This week's unbeaten Gibbler (if there is one) gets the new HP now.
+update public.rng_raids set hp = greatest(dmg + 1, public.rng_gibbler_hp())
+ where id = (select id from public.rng_raids where wk = public.rng_wk() order by id desc limit 1)
+   and boss = 'gibbler' and won_at is null;
+
