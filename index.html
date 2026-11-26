@@ -581,6 +581,11 @@ body.pcin > :not(#pblack):not(#fx) { visibility: hidden; }
 .sheet-head .note { margin: 2px 0 0; font-family: var(--f-num); }
 .sheet-x { width: 32px; height: 32px; border-radius: 50%; background: var(--card); color: var(--muted); font-size: 14px; flex: none; }
 #patch-body { display: grid; gap: 18px; }
+#gift .sheet-card { text-align: center; justify-items: center; }
+#gift-ico { font-size: 46px; line-height: 1; }
+#gift h3 { margin: 0; font-family: var(--f-display); font-size: 22px; letter-spacing: .03em; }
+#gift-msg { margin: 0; font-size: 16px; line-height: 1.45; white-space: pre-line; }
+#gift-claim { font-size: 16px; padding: 10px 22px; }
 .pn-sec { display: grid; gap: 8px; }
 .pn-old { border-top: 1px solid var(--line); padding-top: 12px; }
 .pn-old summary { cursor: pointer; font-family: var(--f-num); font-size: 12px; color: var(--muted); list-style: none; display: flex; justify-content: space-between; }
@@ -1965,6 +1970,14 @@ html.raid .stage { border-color: #6a140c; background: linear-gradient(180deg, #1
     <div id="patch-body"></div>
   </div>
 </div>
+<div class="sheet" id="gift" hidden role="dialog" aria-modal="true" aria-labelledby="gift-title">
+  <div class="sheet-card">
+    <div id="gift-ico">🦃</div>
+    <h3 id="gift-title"></h3>
+    <p id="gift-msg"></p>
+    <button class="btn2 qclaim" id="gift-claim">Claim</button>
+  </div>
+</div>
 
 <div class="sheet" id="settings" hidden role="dialog" aria-modal="true" aria-labelledby="set-title">
   <div class="sheet-card">
@@ -2624,7 +2637,7 @@ function isMulti(b) { return [...new Intl.Segmenter().segment(b.e)].length > 1; 
 function emptyPeriod(key) { return { key, rolls: 0, total_ep: 0, highscores: [], daily: {} }; }
 function emptyState() { return { version: 2, rev: 0, xp: 0, xp_found: [], cos: { avatar: "", skin: "default", name: "plain", bg: "midnight", ds: "classic", frame: "" },
   ach: {}, feats: { wins: 0, win_streak: 0, worst: 0, mm: 0, zh: 0, cap: 0, six: 0, nice: 0, gb: 0, gbr: 0, bc: 0, bcr: 0, rx: 0, qc: 0, tc: { EPIC: 0, ANOMALY: 0, MYTHIC: 0 }, from: 0 }, streak: { last: "", cur: 0, best: 0 }, lows: [], rolls: 0, total_ep: 0, highscores: [], badge_counts: {}, tier_counts: {}, recent: [],
-  prisms: 0, prisms_total: 0, quest: { day: "", list: [], last: null, last2: null }, wk: { k: "", n: 0, r: 0, c: 0, pk: "", pn: 0, pr: 0, pc: 0 }, shop: { boost: 0, shield: 0, swaps: 0, reroll: 0, fosh: 0, coin: 0, oc: 0, auto: 0, stick: 0, btm: 0, sfx: 0, mus: 0 }, owned: [],
+  prisms: 0, prisms_total: 0, quest: { day: "", list: [], last: null, last2: null }, wk: { k: "", n: 0, r: 0, c: 0, pk: "", pn: 0, pr: 0, pc: 0 }, shop: { boost: 0, shield: 0, swaps: 0, reroll: 0, fosh: 0, coin: 0, oc: 0, auto: 0, stick: 0, btm: 0, sfx: 0, mus: 0 }, owned: [], gifts: [],
   pres: 0, up: { w: 0, mr: 0, fr: 0, ar: 0, pf: 0 }, inv: { boost: 0, party: 0, auto: 0, autoxl: 0, reroll: 0 }, raid: { got: [], box: 0, opened: 0, seen: 0, rolls: 0, parts: 0 },
   day: emptyPeriod(periodKey("day")), month: emptyPeriod(periodKey("month")) }; }
 function normPeriod(d, p) {
@@ -2682,6 +2695,7 @@ function normalize(d) {
     reroll: Math.max(0, Math.floor(Number(d.shop.reroll) || 0)), fosh: [0, 1, 2].includes(d.shop.fosh) ? d.shop.fosh : 0, coin: [0, 1, 2].includes(d.shop.coin) ? d.shop.coin : 0, oc: d.shop.oc ? 1 : 0, auto: Math.max(0, Number(d.shop.auto) || 0), stick: d.shop.stick ? 1 : 0, btm: [1, 2].includes(d.shop.btm) ? d.shop.btm : 0, sfx: d.shop.sfx ? 1 : 0, mus: d.shop.mus ? 1 : 0 };
   if (s.shop && s.shop.fosh === 1 && s.shop.coin === 1) s.shop.coin = 2;   // only one of Fosh? / Gold Coin on at a time
   s.owned = Array.isArray(d.owned) ? d.owned.filter((x) => typeof x === "string" && /^(skin|name|bg|ds|frame|av|rx):/.test(x)).slice(0, 60) : [];
+  s.gifts = Array.isArray(d.gifts) ? d.gifts.filter((x) => typeof x === "string").slice(0, 50) : [];   // claimed owner gifts (GIFTS ids)
   const int = (v, max) => Math.min(max, Math.max(0, Math.floor(Number(v) || 0)));     // v1.6 upgrades, loot items, raid
   if (d.up && typeof d.up === "object") s.up = { w: int(d.up.w, 8), mr: int(d.up.mr, 10), fr: int(d.up.fr, 10), ar: int(d.up.ar, 10), pf: int(d.up.pf, 10) };
   s.pres = int(d.pres, 10);                                                     // v1.6 Time Machine uses
@@ -2907,6 +2921,7 @@ function afterLogin(data) {
   ping(true);
   fetchFeats(); fetchLoot();                                     // v1.6: loot of beaten Gibblers
   setInterval(() => { if (document.visibilityState === "visible" && periodKey("day") !== featsDay) fetchFeats(); }, 60000);
+  setTimeout(showGift, 1200);                                     // owner gift, once per account
   questDay(); setTimeout(() => { preloadFosh(); preloadBosco(); }, 3000);   // v1.5: after the start-up requests, not during them
   setInterval(() => { if (document.visibilityState === "visible") { if (state.quest.day !== periodKey("day")) questDay(); else if (isQS()) renderQuests(); } }, 60000);
   // check in every 15 s while the game is open (the answer brings the online dots, a newer save, a party someone started)
@@ -3000,7 +3015,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "cd54498952d4";                                  // filled in by build_site.py
+const BUILD = "88d2f90f74ce";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -4192,6 +4207,25 @@ function closePatch() {
   if (patchReturn && patchReturn.focus) patchReturn.focus();
 }
 $("b-patch").addEventListener("click", openPatch);
+/* ---------- owner gifts: a message + prisms everyone gets once (claimed ids live in the save); claiming opens a loot box with one card ---------- */
+const GIFTS = [
+  { id: "thanksgiving-2026", title: "Happy Thanksgiving", msg: "Thank you all for playing my little game. I’m happy you enjoy it so much :)\nI appreciate all of you!", prisms: 500, tier: "PRISMATIC" },
+];
+function showGift() {
+  const g = ready && GIFTS.find((x) => !state.gifts.includes(x.id)); if (!g || !$("gift").hidden) return;
+  if (summoning || $("lootfx") || $("hell") || $("casino") || $("digfx")) { setTimeout(showGift, 1000); return; }   // not on top of another overlay
+  $("gift-title").textContent = g.title; $("gift-msg").textContent = g.msg;
+  $("gift-claim").dataset.gift = g.id; $("gift-claim").disabled = false;
+  $("gift").hidden = false; document.documentElement.classList.add("sheet-open");
+}
+$("gift-claim").addEventListener("click", (e) => {
+  const b = e.currentTarget, g = GIFTS.find((x) => x.id === b.dataset.gift);
+  if (!g || b.disabled) return; b.disabled = true;
+  $("gift").hidden = true; if ($("settings").hidden && $("patch").hidden) document.documentElement.classList.remove("sheet-open");
+  if (state.gifts.includes(g.id)) return;
+  state.gifts.push(g.id); state.prisms += g.prisms; state.prisms_total += g.prisms; scheduleSave(); markDirtyViews();
+  lootShow([{ tier: g.tier, ti: LOOT.findIndex((x) => x[1] === g.tier), txt: `+${fmt(g.prisms)} ${prismIco()}` }], false, true);
+});
 $("patch-x").addEventListener("click", closePatch);
 $("patch").addEventListener("click", (e) => { if (e.target === $("patch")) closePatch(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("patch").hidden) closePatch(); });
@@ -5605,7 +5639,7 @@ function lbSnd(kind, k) {                                       // synth, effect
     if (k >= 5) [1.26, 1.5, 2].forEach((m, j) => tone("triangle", f * m, f * m, 0.09 * (j + 1), 0.7, 0.1)); }
 }
 let lbJobs = [];
-function lootShow(got, quick) {
+function lootShow(got, quick, gift) {                         // gift: owner gift, no "Open next"
   lbJobs.forEach(clearTimeout); lbJobs = [];
   const old = $("lootfx"); if (old) old.remove();
   const best = got.reduce((a, g) => Math.max(a, g.ti), 0), col = (ti) => ti >= 6 ? "#c4a5ff" : cvar(LOOT[ti][1]);
@@ -5614,7 +5648,7 @@ function lootShow(got, quick) {
   ov.innerHTML = `<div class="lb-flash"></div><div class="lb-stage"><div class="lb-rays"><i></i></div><div class="lb-glow"></div><div class="lb-sp">${sp}</div>` +
     `<div class="lb-box"><div class="lb-sh"><div class="lb-body"></div><div class="lb-lid"></div></div></div></div>` +
     `<div class="lb-cards">${got.map((g, i) => `<div class="lb-card${g.ti >= 2 ? " hi" : ""}${g.ti >= 5 ? " top" : ""}" style="--c:${col(g.ti)};--fy:calc(-20vh - ${i * 54}px)"><i>${g.tier}</i><b>${g.txt}</b></div>`).join("")}</div>` +
-    `<div class="lb-foot"><button class="btn2" data-lb="done">OK</button>${state.raid.box > 0 ? `<button class="btn2 lb-next" data-lb="next">Open next (${state.raid.box})</button>` : ""}</div>`;
+    `<div class="lb-foot"><button class="btn2" data-lb="done">OK</button>${!gift && state.raid.box > 0 ? `<button class="btn2 lb-next" data-lb="next">Open next (${state.raid.box})</button>` : ""}</div>`;
   if (quick) ov.classList.add("q");
   document.body.appendChild(ov); void ov.offsetWidth;
   const cards = [...ov.querySelectorAll(".lb-card")], at = (ms, f) => lbJobs.push(setTimeout(f, ms));
@@ -5628,7 +5662,7 @@ function lootShow(got, quick) {
   ov.addEventListener("click", (e) => {
     if (!done) { finish(); return; }                            // the first tap skips to the end
     const b = e.target.closest("[data-lb]"); if (!b) return;
-    if (b.dataset.lb === "next" && state.raid.box > 0) { checkAch(); openBox(true); } else close();
+    if (b.dataset.lb === "next" && !gift && state.raid.box > 0) { checkAch(); openBox(true); } else close();
   });
   ov.classList.add("on");
   if (lowMotion()) { finish(); return; }
