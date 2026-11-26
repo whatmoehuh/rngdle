@@ -66,7 +66,7 @@ button:focus-visible, [tabindex]:focus-visible { outline: 2px solid var(--accent
   background: linear-gradient(to bottom, var(--bg) 55%, transparent); -webkit-backdrop-filter: blur(5px); backdrop-filter: blur(5px);
   -webkit-mask-image: linear-gradient(to bottom, #000 80%, transparent); mask-image: linear-gradient(to bottom, #000 80%, transparent); }
 body.glass .tabs { background: linear-gradient(to bottom, rgb(12 14 20 / .5) 55%, transparent); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); }
-.seg { display: grid; grid-template-columns: repeat(5, 1fr); gap: 2px; }
+.seg { display: grid; grid-template-columns: repeat(4, 1fr); gap: 2px; }
 .seg button { position: relative; padding: 8px 2px 11px; font-size: 13px; font-weight: 600; color: var(--muted); white-space: nowrap; }
 .seg button[aria-selected="true"] { color: var(--fg); }
 .seg button[aria-selected="true"]::after { content: ""; position: absolute; left: 30%; right: 30%; bottom: 3px; height: 3px; border-radius: 2px; background: var(--accent);
@@ -1631,6 +1631,10 @@ body.rolling .bg-prism .fanw { opacity: 1; }
 @media (prefers-reduced-motion: reduce) { .bgx, .bgx *, .lvchip, .lvchip *, .nw, .nw *, .pn { animation: none !important; } }
 /* ---------- v1.6 Shop tabs + upgrades ---------- */
 .shoptabs { margin: 4px 0 2px; }
+.qtabs { flex-wrap: nowrap; gap: 4px; justify-content: space-between; overflow-x: auto; scrollbar-width: none; margin-bottom: 10px; padding-top: 3px; }
+.qtabs::-webkit-scrollbar { display: none; }
+#view-quests > * { min-width: 0; }
+.qtabs .chip { position: relative; flex: 0 0 auto; padding: 6px 7px; }
 .shopsep { height: 1px; margin: 18px 0 4px; background: var(--line); }
 /* ---------- v1.6 Raid: The Gibbler ---------- */
 .raidparts, .raidcard { background: linear-gradient(160deg, #2a0705, var(--panel) 70%); border-color: #7a1a10; }
@@ -2066,7 +2070,6 @@ body.rolling .bg-casino .ball { opacity: 1; }
       <button role="tab" id="tab-ranking" data-view="ranking" aria-selected="false">Ranking</button>
       <button role="tab" id="tab-quests" data-view="quests" aria-selected="false">Quests<i class="newdot" id="quests-dot" hidden></i></button>
       <button role="tab" id="tab-shop" data-view="shop" aria-selected="false">Shop</button>
-      <button role="tab" id="tab-collection" data-view="collection" aria-selected="false">Badges</button>
     </div>
   </nav>
 
@@ -2109,23 +2112,25 @@ body.rolling .bg-casino .ball { opacity: 1; }
 
     <section id="view-quests" class="view" hidden>
       <div id="quests-box"></div>
+      <div id="q-coll" hidden>
+        <div class="chips" id="coll-filter">
+          <button class="chip" data-f="all" aria-pressed="true">All</button>
+          <button class="chip" data-f="found" aria-pressed="false">Found</button>
+          <button class="chip" data-f="missing" aria-pressed="false">Missing</button>
+        </div>
+        <div id="q-ach">
+          <div class="listhead collhead"><span><b>ACHIEVEMENTS</b><span id="ach-count"></span></span></div>
+          <div class="rows" id="achs"></div>
+        </div>
+        <div id="q-bdg">
+          <div class="listhead collhead"><span><b>ROLL BADGES</b><span id="coll-count"></span></span></div>
+          <div class="rows" id="collection"></div>
+        </div>
+      </div>
     </section>
 
     <section id="view-shop" class="view" hidden>
       <div id="shop-box"></div>
-    </section>
-
-    <section id="view-collection" class="view" hidden>
-      <div class="sechead"><h2>Collection</h2><p id="coll-count"></p></div>
-      <div class="chips" id="coll-filter">
-        <button class="chip" data-f="all" aria-pressed="true">All</button>
-        <button class="chip" data-f="found" aria-pressed="false">Found</button>
-        <button class="chip" data-f="missing" aria-pressed="false">Missing</button>
-      </div>
-      <div class="listhead collhead"><span><b>ACHIEVEMENTS</b><span id="ach-count"></span></span></div>
-      <div class="rows" id="achs"></div>
-      <div class="listhead collhead"><span><b>ROLL BADGES</b></span></div>
-      <div class="rows" id="collection"></div>
     </section>
 
   </main>
@@ -2865,7 +2870,7 @@ function emojiOf(b) { return b.e; }
 function isMulti(b) { return [...new Intl.Segmenter().segment(b.e)].length > 1; }
 
 /* ================= state (same format as the PC save file) ================= */
-function emptyPeriod(key) { return { key, rolls: 0, total_ep: 0, highscores: [], daily: {} }; }
+function emptyPeriod(key) { return { key, rolls: 0, rdr: 0, total_ep: 0, highscores: [], daily: {} }; }   // rdr = raid rolls (hotfix 26.11.: leaderboard roll count only)
 function emptyState() { return { version: 2, rev: 0, xp: 0, xp_found: [], cos: { avatar: "", skin: "default", name: "plain", bg: "midnight", ds: "classic", frame: "" },
   ach: {}, feats: { wins: 0, win_streak: 0, worst: 0, mm: 0, zh: 0, cap: 0, six: 0, nice: 0, gb: 0, gbr: 0, bc: 0, bcr: 0, rx: 0, rxs: [], qc: 0, tc: { EPIC: 0, ANOMALY: 0, MYTHIC: 0 }, from: 0 }, streak: { last: "", cur: 0, best: 0 }, lows: [], rolls: 0, total_ep: 0, highscores: [], badge_counts: {}, tier_counts: {}, recent: [],
   prisms: 0, prisms_total: 0, quest: { day: "", list: [], last: null, last2: null }, wk: { k: "", n: 0, r: 0, c: 0, pk: "", pn: 0, pr: 0, pc: 0 }, shop: { boost: 0, shield: 0, swaps: 0, reroll: 0, fosh: 0, coin: 0, oc: 0, auto: 0, stick: 0, btm: 0, sfx: 0, mus: 0 }, owned: [], gifts: [],
@@ -2875,7 +2880,7 @@ function normPeriod(d, p) {
   if (!d || typeof d !== "object" || typeof d.key !== "string") return emptyPeriod(periodKey(p));
   const daily = {};
   if (d.daily && typeof d.daily === "object") for (const [k, v] of Object.entries(d.daily)) if (/^\d{4}-\d\d-\d\d$/.test(k) && Number(v) > 0) daily[k] = Number(v);
-  return { key: d.key, rolls: Number(d.rolls) || 0, total_ep: Number(d.total_ep) || 0, daily,
+  return { key: d.key, rolls: Number(d.rolls) || 0, rdr: Number(d.rdr) || 0, total_ep: Number(d.total_ep) || 0, daily,
     highscores: Array.isArray(d.highscores) ? d.highscores.filter((e) => e && typeof e.number === "number").slice(0, HIGHSCORE_SLOTS) : [] };
 }
 /** Best EP per day this month. Days from before this was tracked are filled in from the dates of this month's top rolls. */
@@ -3249,7 +3254,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "74c4534e5a5e";                                  // filled in by build_site.py
+const BUILD = "49d43035cde0";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -3288,7 +3293,7 @@ setInterval(() => { if (!ready || document.visibilityState !== "visible") return
 let lastPlayer = "";
 function periodSummary(P) {
   const b = P.highscores[0];
-  return { rolls: P.rolls, total_ep: P.total_ep, best_ep: b ? b.ep : 0, best_number: b ? b.number : null,
+  return { rolls: P.rolls, rdr: P.raid ? P.raid.rolls : P.rdr || 0, total_ep: P.total_ep, best_ep: b ? b.ep : 0, best_number: b ? b.number : null,
     best_tier: b ? b.tier : null, best_top: b && b.top ? b.top.slice(0, 1) : [], rr: b && b.rr ? 1 : 0, au: b && b.au ? 1 : 0 };
 }
 const compact = (list) => list.slice(0, 25).map((e) => Object.assign({ n: e.number, ep: e.ep, t: e.tier, b: (e.top || [])[0] || null, d: e.date }, e.rr ? { rr: 1 } : {}, e.au ? { au: 1 } : {}));
@@ -3328,11 +3333,12 @@ async function fetchBoard() {
   if (!error) { dirtyViews.add("quests"); if (isQS()) renderQuests(); else markQuestDot(); }
 }
 
+const allRolls = (p) => (p.rolls || 0) + (p.rdr || 0);   // hotfix 26.11. (Nico): raid rolls count in the Rolls ranking only (not avg EP)
 const SORTS = {
   best: { val: (p) => p.best_ep || 0, show: (p) => fmt(p.best_ep || 0), unit: (p) => p.best_tier || "", color: (p) => (p.best_tier ? cvar(p.best_tier) : "var(--fg)") },
   avg: { val: (p) => (p.rolls ? p.total_ep / p.rolls : 0), show: (p) => fmt(Math.floor(p.rolls ? p.total_ep / p.rolls : 0)), unit: () => "AVG EP", color: () => "var(--fg)" },
   daily: { val: (p) => p.daily_sum ?? p.best_ep ?? 0, show: (p) => fmt(p.daily_sum ?? p.best_ep ?? 0), unit: () => "DAILY BESTS", color: () => "var(--fg)" },
-  rolls: { val: (p) => p.rolls || 0, show: (p) => fmt(p.rolls || 0), unit: () => "ROLLS", color: () => "var(--fg)" },
+  rolls: { val: (p) => allRolls(p), show: (p) => fmt(allRolls(p)), unit: () => "ROLLS", color: () => "var(--fg)" },
 };
 SORTS.top = SORTS.worst = SORTS.best;
 let rankSort = (() => { try { return localStorage.getItem("rngdle-pocket-rank") || "best"; } catch { return "best"; } })();
@@ -3403,7 +3409,7 @@ async function renderRanking() {
   if (playersState === "error") return msg("Can't load the leaderboard right now. Try again later.");
   const sort = SORTS[rankSort];
   const rollMode = rankSort === "top" || rankSort === "worst" || (rankSort === "best" && rankPeriod !== "day");
-  const list = rankSort === "worst" ? worstRolls() : rollMode ? topRolls(rankPeriod) : players.map((p) => { const q = playerPeriod(p, rankPeriod); return q && (q.rolls || 0) > 0
+  const list = rankSort === "worst" ? worstRolls() : rollMode ? topRolls(rankPeriod) : players.map((p) => { const q = playerPeriod(p, rankPeriod); return q && (rankSort === "rolls" ? allRolls(q) : q.rolls || 0) > 0
       ? Object.assign({}, q, { id: p.id, nick: p.nick, name: p.name, found: p.found, crown: p.crown, online: p.online, lv: p.lv, pl: p.pl, av: p.av, ns: p.ns, achs: p.achs, buy: p.buy, fr: p.fr }) : null; })
     .filter(Boolean).filter((p) => rankSort !== "daily" || sort.val(p) > 0)
     .sort((a, b) => sort.val(b) - sort.val(a) || (b.best_ep || 0) - (a.best_ep || 0));
@@ -3416,7 +3422,7 @@ async function renderRanking() {
     const sub = rollMode ? `${p.best_number}${p.rr ? " 🎲" : ""}${p.au ? " 🤖" : ""}${p.date ? ` · ${shortDate(p.date)}` : ""}`
       : rankSort === "best" && p.best_number != null ? `best ${p.best_number}${p.rr ? " 🎲" : ""}${p.au ? " 🤖" : ""}`
       : rankSort === "daily" ? ""
-      : `${fmt(p.rolls || 0)} ${p.rolls === 1 ? "roll" : "rolls"} · ${p.found || 0} badges`;
+      : `${fmt(rankSort === "rolls" ? allRolls(p) : p.rolls || 0)} ${(rankSort === "rolls" ? allRolls(p) : p.rolls) === 1 ? "roll" : "rolls"} · ${p.found || 0} badges`;
     const tinted = (rollMode || rankSort === "best") && !!p.best_tier;
     return `<button class="row prow${p.id === uid ? " me" : ""}${tinted ? " tinted" : ""}"${tinted ? ` style="--rc:${cvar(p.best_tier)}"` : ""} data-k="${i}"><span class="rk ${medal}">${i + 1}</span>${rollMode ? `<span class="av" data-em="${em}">${em}</span>` : avatarHTML(p, em)}` +
       `<span class="nm"><b><span class="pn"></span>${p.lv ? `<span class="lvc">LV ${p.lv}</span>` : ""}${p.online ? `<i class="online" role="img" aria-label="online"></i>` : ""}${p.crown ? `<span class="crown">${"👑".repeat(p.crown)}</span>` : ""}${p.id === uid ? `<span class="you">YOU</span>` : ""}</b>${sub ? `<small>${esc(sub)}</small>` : ""}</span>` +
@@ -4165,11 +4171,12 @@ function paintHeadAv(L = peakLv()) {                       // v1.5: the profile 
 
 /* ================= other views ================= */
 let view = "roll";
-const VIEWS = ["roll", "ranking", "quests", "shop", "collection"];
+const VIEWS = ["roll", "ranking", "quests", "shop"];   // hotfix 26.11.: Badges moved into Quests (tabs)
 const dirtyViews = new Set(["ranking", "quests", "collection", "stats"]);   // "stats" = the Stats pane of the profile (v1.5)
 function markDirtyViews() { ["ranking", "quests", "collection", "stats"].forEach((v) => dirtyViews.add(v)); if (view !== "roll") renderView(view); if (pfStatsOpen()) renderView("stats"); }
 function isQS() { return view === "quests" || view === "shop"; }      // v1.5: Quests and Shop are two tabs, renderQuests() draws both
 function setView(v) {
+  if (v === "collection") { v = "quests"; if (!isCollTab()) questTab = "ach"; }
   if (!VIEWS.includes(v)) v = "roll";
   view = v;
   for (const s of VIEWS) {
@@ -4178,13 +4185,13 @@ function setView(v) {
   }
   $("rollbar").hidden = v !== "roll";
   if (location.hash !== "#" + v) history.replaceState(null, "", "#" + v);
-  if (dirtyViews.has(v) || v === "shop") renderView(v);
+  if (dirtyViews.has(v) || v === "shop" || (v === "quests" && isCollTab() && dirtyViews.has("collection"))) renderView(v);
   if ((v === "ranking" || v === "quests") && ready) fetchBoard();
   if (v === "roll") { flobBack(); boscoBack(); }
 }
 function renderView(v) {
   dirtyViews.delete(v);
-  if (v === "ranking") renderRanking(); else if (v === "quests" || v === "shop") { dirtyViews.delete("quests"); renderQuests(); } else if (v === "collection") renderCollection(); else if (v === "stats") renderStats();
+  if (v === "ranking") renderRanking(); else if (v === "quests" || v === "shop") { dirtyViews.delete("quests"); renderQuests(); } else if (v === "collection") collRefresh(); else if (v === "stats") renderStats();
 }
 function topEmoji(e) { const id = e.top && e.top[0]; return id && BY_ID[id] ? [...new Intl.Segmenter().segment(BY_ID[id].e)][0].segment : "🎲"; }
 let scoresPeriod = "recent", scoresShown = [];     // Stats: recent rolls (default) or my best rolls today / this month / all-time
@@ -4207,7 +4214,7 @@ let openBadge = null;
 function renderCollection() {
   renderAch();
   const f = discovered();
-  $("coll-count").textContent = `${f} / ${TOTAL_BADGES} found`;
+  $("coll-count").textContent = `${f} / ${TOTAL_BADGES}`;
   for (const c of $("coll-filter").children) c.setAttribute("aria-pressed", String(c.dataset.f === collFilter));
   const list = RNG.BADGES.slice().sort((a, b) => b.ep - a.ep || (a.n < b.n ? -1 : 1)).filter((b) => {
     const got = (state.badge_counts[b.id] || 0) > 0;
@@ -4944,7 +4951,7 @@ function checkAch() {
     if (!any) break;
   }
   if (!got.length) return;
-  scheduleSave(); renderChrome(); dirtyViews.add("collection"); if (view === "collection") renderCollection();
+  scheduleSave(); renderChrome(); dirtyViews.add("collection"); collRefresh();
   const xp = got.reduce((t, a) => t + a.xp, 0), pics = got.filter((a) => a.av).map((a) => AVATARS.find((x) => x.id === a.av).name);
   const pr = got.reduce((t, a) => t + (a.pr || 0), 0), pay = [xp ? `+${fmt(xp)} XP` : "", pr ? `+${fmt(pr)} prisms` : "", pics.length ? `Unlocked: ${esc(pics.join(", "))}` : ""].filter(Boolean).join(" · ");
   notify(got.length === 1
@@ -4974,7 +4981,7 @@ async function fetchFeats() {
 function renderAch() {
   $("ach-count").textContent = `${ACH.filter((a) => state.ach[a.id]).length} / ${ACH.length}`;
   const list = ACH.filter((a) => collFilter === "all" || (collFilter === "found") === !!state.ach[a.id]);
-  $("achs").hidden = !list.length;
+  if (!list.length) { $("achs").innerHTML = `<div class="empty">${collFilter === "found" ? "No achievements yet." : "You've got every achievement."}</div>`; return; }
   $("achs").innerHTML = list.map((a) => {
     const got = state.ach[a.id], h = Math.min(a.have(), a.need);
     if (achHidden(a)) return `<div class="crow achrow locked"><span class="ic">❓</span><span class="cn">${a.named ? esc(a.n) : "???"}<small>Hidden achievement</small></span><span class="cv"><b>??? XP</b>hidden</span></div>`;
@@ -5634,7 +5641,17 @@ function wkHTML() {
     (last ? `<div class="wqlast"><span>Last week: ${esc(weekQuest(last.k).t)}</span><button class="btn2 small qclaim" data-wclaim="${last.k}">Claim +${last.pay} ${prismIco()}</button></div>` : "") +
     `<p class="note" style="margin:0">New weekly quest in ${untilMonday()}.</p></div>`;
 }
-function markQuestDot() { const Q = state.quest; $("quests-dot").hidden = !(ready && (Q.day === periodKey("day") && Q.list.some((q) => q.done && !q.claimed) || wkClaimable().length > 0 || !!(raidLoot && raidLoot.length) || state.raid.box > 0 || state.raid.gbox > 0)); }
+// Hotfix 26.11. (Nico): Quests has tabs Weekly · Quests · Raid · Achievements · Badges (the Badges nav tab moved in here).
+const QUEST_TABS = [["wk", "Weekly"], ["q", "Quests"], ["raid", "Raid"], ["ach", "Achievements"], ["bdg", "Badges"]];
+let questTab = "q";
+const isCollTab = () => questTab === "ach" || questTab === "bdg";
+function collRefresh() { if (view === "quests" && isCollTab()) { dirtyViews.delete("collection"); renderCollection(); } }
+function qTabDot(id) {
+  const Q = state.quest;
+  return ready && (id === "q" ? Q.day === periodKey("day") && Q.list.some((q) => q.done && !q.claimed) : id === "wk" ? wkClaimable().length > 0
+    : id === "raid" ? !!(raidLoot && raidLoot.length) || state.raid.box > 0 || state.raid.gbox > 0 : false);
+}
+function markQuestDot() { $("quests-dot").hidden = !QUEST_TABS.some(([id]) => qTabDot(id)); }
 let swapArm = null, swapTimer = null, questFresh = -1, buyArm = null, buyArmT = null;
 function renderQuests() {
   if (ready && ensureQuests()) scheduleSave();
@@ -5666,7 +5683,11 @@ function renderQuests() {
     prismShop = PRISM_SHOP.map(shopRow).join(""), what = cat("❓ ???", SHOP.filter((x) => x.cat === "what"));
   $("quests-box").innerHTML =
     `<div class="sechead"><h2>Quests</h2><div class="sechead-r"><span class="prismbal" id="prismbal">${prismIco()}<b>${fmt(state.prisms)}</b></span></div></div>` +
-    (ready ? weeklyArea() : "") + `<div class="quests">${ready ? cards : `<div class="empty">Loading your save…</div>`}</div>`;
+    `<div class="chips shoptabs qtabs">${QUEST_TABS.map(([id, n]) => `<button class="chip" data-qtab="${id}" aria-pressed="${questTab === id}">${n}${qTabDot(id) ? `<i class="newdot"></i>` : ""}</button>`).join("")}</div>` +
+    (isCollTab() ? "" : !ready ? `<div class="quests"><div class="empty">Loading your save…</div></div>`
+      : questTab === "wk" ? wkHTML() : questTab === "raid" ? raidArea() : `<div class="quests">${cards}</div>`);
+  $("q-coll").hidden = !isCollTab(); $("q-ach").hidden = questTab !== "ach"; $("q-bdg").hidden = questTab !== "bdg";
+  if (dirtyViews.has("collection")) collRefresh();
   $("shop-box").innerHTML =
     `<div class="sechead"><h2>Shop</h2><div class="sechead-r"><span class="prismbal" id="prismbal2">${prismIco()}<b>${fmt(state.prisms)}</b></span></div></div>` +
     shop + (shopTab === "cus" ? `<div class="shopcat"><b class="pn ns-prism">✨ PRISMATIC</b></div><div class="rows shop">${prismShop}</div>` + what : "");
@@ -6055,7 +6076,7 @@ function updateHud() {
   h.innerHTML = `<span class="rh-av"><img src="${B.face()}" alt="">${ch > 0 ? `<i class="rh-ch">${CHIP_ICO}${fmt(ch)}</i>` : ""}</span><div class="rh-m"><div class="rh-t"><b>${B.hud}</b><span>${fmt(raidHP())} / ${fmt(raid.hp)} HP</span></div>` +
     `<div class="hpbar"><i style="width:${pct.toFixed(2)}%"></i></div></div><button class="btn2 small" data-raid="leave">Leave</button>`;
 }
-/** Like record(), for raid rolls: XP (max 1M), badges, quests, luck stats. No leaderboard lists, no roll count, no streak, no weekly. */
+/** Like record(), for raid rolls: XP (max 1M), badges, quests, luck stats. No leaderboard lists, roll count only in the Rolls ranking, no streak, no weekly. */
 function recordRaid(n, total, tier, rows) {
   const lvBefore = level();   // raid rolls stay out of tier_counts (the Stats % bars are per normal roll)
   const newIds = new Set();
@@ -6071,6 +6092,7 @@ function recordRaid(n, total, tier, rows) {
   if (String(n).includes("666")) F.six = 1;
   if (F.tc[tier] != null) F.tc[tier] += 1;
   state.raid.rolls += 1;
+  for (const p of ["day", "month"]) { const P = state[p] = periodOf(state, p); P.rdr = (P.rdr || 0) + 1; }   // hotfix 26.11.: Rolls ranking
   const R = state.raid; R.tc[tier] = (R.tc[tier] || 0) + 1; R.ep += total; if (!R.best || total > R.best.ep) R.best = { number: n, ep: total, tier };   // v1.6.1 raid stats
   const quests = questStep(n, total, tier, rows);
   scheduleSave();
@@ -6144,7 +6166,7 @@ function summonSeq() {
   summoning = true;
   const B = bossOf(raid), tot = Object.keys(B.parts).length;
   const end = () => {
-    setView("quests");
+    questTab = "raid"; setView("quests");
     const old = document.querySelector(".raidparts");
     if (old && !lowMotion()) { old.classList.add("burn"); setTimeout(() => { summoning = false; renderQuests(); const c = document.querySelector(".raidcard"); if (c) c.classList.add("fresh"); }, 1300); }
     else { summoning = false; renderQuests(); }
@@ -6260,15 +6282,17 @@ function lootHTML() {
     `<div class="qfoot"><span></span>${n || g ? `<button class="btn2 small qclaim" data-raid="claim">Claim ${has(n, g)}</button>`
       : `<span class="lootbtns">${box ? `<button class="btn2 small qclaim" data-raid="open">Open 🎁 (${box})</button>` : ""}${gbox ? `<button class="btn2 small qclaim gold" data-raid="gopen">Open ${GBOX_ICO} (${gbox})</button>` : ""}</span>`}</div></div>`;
 }
-/** What goes where the weekly quest card was. */
-function weeklyArea() {
-  return wkHTML() + lootHTML() + (raidHere() && !summoning ? raidCardHTML() : partsHTML());   // v1.6.1: weekly quest and raid are separate
+/** The Raid tab of Quests (hotfix 26.11.: weekly quest has its own tab). */
+function raidArea() {
+  return lootHTML() + (raidHere() && !summoning ? raidCardHTML() : partsHTML());
 }
 async function raidClick(e) {
   const r = e.target.closest("[data-raid]"), u = e.target.closest("[data-use]");
   if (u) { useInv(u.dataset.use, u); return; }
   const st = e.target.closest("[data-stab]");
   if (st) { shopTab = st.dataset.stab; renderQuests(); return; }
+  const qt = e.target.closest("[data-qtab]");
+  if (qt) { questTab = qt.dataset.qtab; dirtyViews.add("collection"); renderQuests(); return; }
   if (!r) return;
   const a = r.dataset.raid;
   if (a === "attack") enterRaid();
