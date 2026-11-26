@@ -1439,3 +1439,219 @@ update public.rng_raids set hp = greatest(dmg + 1, public.rng_gibbler_hp())
  where id = (select id from public.rng_raids where wk = public.rng_wk() order by id desc limit 1)
    and boss = 'gibbler' and won_at is null;
 
+
+-- ============================================================================
+-- RNGdle Pocket v1.6.1 (part 2): Raid "Gambling King Bosco"
+-- Run it together with the 1.6.1 game push (APP_VERSION 1.6.1): the last line makes everyone update.
+-- Includes hotfix_gibbler_hp_week.sql (no need to run that one).
+-- Every week starts with the Gibbler, then Bosco, Gibbler, Bosco, ... (each next raid starts when the last one is beaten).
+-- HP (Nico 26.11.): Gibbler 20,457 / Bosco 77,777, × 1.8 for every time that boss was already beaten this week:
+--   Gibbler 20,457 → Bosco 77,777 → Gibbler ×1.8 → Bosco ×1.8 → Gibbler ×1.8² → ...  Everything resets Monday 0:00.
+-- Not beaten by Monday 0:00 = gone, no loot. 7 Bosco treasures.
+-- If a Gibbler was beaten before this runs and the old app already started collecting parts for another Gibbler,
+-- that unsummoned raid becomes Bosco (its parts are dropped; the finders keep their prisms).
+-- Bosco hits can be big (777 jackpot ×7, Lucky Chip ×2): a hit is clamped to ±3,000 (Gibbler ±500, was ±200).
+-- Reaction "bosco" (raid loot, owned as "rx:bosco"). Party Potions stack. Safe to run twice.
+-- ============================================================================
+
+-- Boss HP: base × 1.8^(wins of that boss in week w).
+create or replace function public.rng_boss_hp(b text, w date default public.rng_wk()) returns int
+  language sql stable security definer set search_path = public as $$
+  select least(2000000000, round((case when b = 'bosco' then 77777 else 20457 end) * power(1.8, (select count(*) from public.rng_raids
+    where boss = b and won_at is not null and wk = w))))::int $$;
+revoke all on function public.rng_boss_hp(text, date) from public, anon, authenticated;
+
+create or replace function public.rng_gibbler_hp() returns int
+  language sql stable security definer set search_path = public as $$ select public.rng_boss_hp('gibbler') $$;
+revoke all on function public.rng_gibbler_hp() from public, anon, authenticated;
+
+create or replace function public.rng_raids_hp() returns trigger
+  language plpgsql security definer set search_path = public as $$
+begin
+  if new.boss in ('gibbler', 'bosco') then new.hp := public.rng_boss_hp(new.boss, new.wk); end if;
+  return new;
+end $$;
+revoke all on function public.rng_raids_hp() from public, anon, authenticated;
+
+drop trigger if exists rng_raids_hp on public.rng_raids;
+create trigger rng_raids_hp before insert on public.rng_raids for each row execute function public.rng_raids_hp();
+
+-- Which boss comes next this week: the newest raid's boss while it isn't beaten, else the other one. No raid yet = the Gibbler.
+create or replace function public.rng_raid_next(w date) returns text
+  language sql stable security definer set search_path = public as $$
+  select coalesce((select case when r.won_at is null then r.boss when r.boss = 'gibbler' then 'bosco' else 'gibbler' end
+                   from public.rng_raids r where r.wk = w order by r.id desc limit 1), 'gibbler') $$;
+revoke all on function public.rng_raid_next(date) from public, anon, authenticated;
+
+-- Old app started a Gibbler right after a Gibbler win → turn that unsummoned raid into Bosco.
+do $$
+declare
+  w date := public.rng_wk();
+  rid bigint := (select id from public.rng_raids where wk = w order by id desc limit 1);
+  pid bigint := (select id from public.rng_raids where wk = w and id < coalesce(rid, 0) order by id desc limit 1);
+begin
+  if rid is not null and pid is not null
+     and (select boss = 'gibbler' and spawned_at is null and won_at is null from public.rng_raids where id = rid)
+     and (select boss = 'gibbler' and won_at is not null from public.rng_raids where id = pid) then
+    delete from public.rng_raid_parts where raid_id = rid;
+    update public.rng_raids set boss = 'bosco', hp = public.rng_boss_hp('bosco', w), dmg = 0 where id = rid;
+  end if;
+end $$;
+
+-- The newest raid of this week (1.6.1 + 'next' and 'beaten_b' = Bosco wins this week).
+create or replace function public.rng_raid_info(a uuid) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare rid bigint := (select id from public.rng_raids where wk = public.rng_wk() order by id desc limit 1);
+begin
+  if rid is null then return null; end if;
+  return (select json_build_object(
+    'id', r.id, 'boss', r.boss, 'hp', r.hp, 'dmg', r.dmg,
+    'parts', coalesce((select json_agg(p.part order by p.at) from public.rng_raid_parts p where p.raid_id = r.id), '[]'::json),
+    'found', coalesce((select json_object_agg(p.part, json_build_object('by', ac.display, 'uid', p.account_id)) from public.rng_raid_parts p
+                       left join public.rng_accounts ac on ac.id = p.account_id where p.raid_id = r.id), '{}'::json),
+    'fight', r.spawned_at is not null and r.won_at is null and now() < r.ends_at,
+    'spawned', case when r.spawned_at is null then null else floor(extract(epoch from r.spawned_at) * 1000) end,
+    'ends', case when r.ends_at is null then null else floor(extract(epoch from r.ends_at) * 1000) end,
+    'won', r.won_at is not null,
+    'starter', (select display from public.rng_accounts where id = r.starter),
+    'beaten', (select count(*) from public.rng_raids x where x.wk = r.wk and x.won_at is not null),
+    'beaten_b', (select count(*) from public.rng_raids x where x.wk = r.wk and x.won_at is not null and x.boss = 'bosco'),
+    'next', public.rng_raid_next(r.wk),
+    'mine', (select json_build_object('rolls', f.rolls, 'dmg', f.dmg) from public.rng_raid_fighters f where f.raid_id = r.id and f.account_id = a))
+    from public.rng_raids r where r.id = rid);
+end $$;
+revoke all on function public.rng_raid_info(uuid) from public, anon, authenticated;
+
+-- A part (Gibbler) or treasure (Bosco) dropped on this phone. The server starts the next raid when the last one is beaten,
+-- picks one of the missing pieces (no duplicates) and summons the boss with the last one (6 Gibbler parts, 7 Bosco treasures).
+create or replace function public.rng_raid_part(p_token text, p_req text) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  w date := public.rng_wk();
+  rid bigint;
+  bs text;
+  pool text[];
+  pt text;
+  cnt int;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  perform pg_advisory_xact_lock(6661);
+  pt := (select part from public.rng_raid_parts where req = p_req and account_id = a limit 1);
+  if pt is not null then
+    return json_build_object('ok', true, 'part', pt, 'again', true, 'raid', public.rng_raid_info(a));
+  end if;
+  rid := (select id from public.rng_raids where wk = w order by id desc limit 1);
+  if rid is null or (select won_at is not null from public.rng_raids where id = rid) then
+    bs := public.rng_raid_next(w);
+    insert into public.rng_raids (wk, boss, hp) values (w, bs, public.rng_boss_hp(bs, w));   -- trigger sets the same hp
+    rid := (select id from public.rng_raids where wk = w order by id desc limit 1);
+  end if;
+  if (select spawned_at is not null from public.rng_raids where id = rid) then
+    return json_build_object('ok', false, 'raid', public.rng_raid_info(a));      -- the boss is already here
+  end if;
+  bs := (select boss from public.rng_raids where id = rid);
+  pool := case when bs = 'bosco' then array['coin', 'dice', 'ring', 'bag', 'keys', 'joker', 'ticket']
+               else array['fart', 'brain', 'beans', 'poop', 'tail', 'head'] end;
+  pt := (select x from unnest(pool) x where x not in (select part from public.rng_raid_parts where raid_id = rid) order by random() limit 1);
+  if pt is null then return json_build_object('ok', false, 'raid', public.rng_raid_info(a)); end if;
+  insert into public.rng_raid_parts (raid_id, part, account_id, req) values (rid, pt, a, p_req);
+  cnt := (select count(*) from public.rng_raid_parts where raid_id = rid);
+  if cnt >= array_length(pool, 1) then
+    update public.rng_raids set spawned_at = now(), starter = a,
+      ends_at = ((w + 7)::timestamp at time zone 'Europe/Berlin') where id = rid;
+  end if;
+  return json_build_object('ok', true, 'part', pt, 'boss', bs, 'summoned', cnt >= array_length(pool, 1), 'raid', public.rng_raid_info(a));
+end $$;
+revoke all on function public.rng_raid_part(text, text) from public;
+grant execute on function public.rng_raid_part(text, text) to anon, authenticated;
+
+-- The phone scored a raid hit: damage (negative = heal) on the boss, the roll on the boss board. Clamp per boss.
+create or replace function public.rng_raid_hit(p_token text, p_raid bigint, p_n int, p_ep numeric, p_dmg int) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare
+  a uuid := public.rng_session(p_token);
+  lim int;
+  d int;
+  fin boolean := false;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  perform 1 from public.rng_raids where id = p_raid for update;
+  if not coalesce((select spawned_at is not null and won_at is null and now() < ends_at from public.rng_raids where id = p_raid), false) then
+    return json_build_object('ok', false, 'raid', public.rng_raid_info(a));
+  end if;
+  lim := case when (select boss from public.rng_raids where id = p_raid) = 'bosco' then 3000 else 500 end;
+  d := least(lim, greatest(-lim, coalesce(p_dmg, 0)));
+  update public.rng_raids set dmg = greatest(0, least(hp, dmg + d)) where id = p_raid;
+  if (select dmg >= hp from public.rng_raids where id = p_raid) then
+    update public.rng_raids set won_at = now(), final_by = a where id = p_raid;
+    fin := true;
+  end if;
+  insert into public.rng_raid_fighters (raid_id, account_id, rolls, dmg, best_ep, best_n, best_at)
+    values (p_raid, a, 1, d, p_ep, p_n, now())
+    on conflict (raid_id, account_id) do update set rolls = rng_raid_fighters.rolls + 1, dmg = rng_raid_fighters.dmg + d,
+      best_ep = greatest(rng_raid_fighters.best_ep, excluded.best_ep),
+      best_n = case when excluded.best_ep > rng_raid_fighters.best_ep then excluded.best_n else rng_raid_fighters.best_n end,
+      best_at = case when excluded.best_ep > rng_raid_fighters.best_ep then excluded.best_at else rng_raid_fighters.best_at end;
+  if (select count(*) < 25 or min(ep) < p_ep from (select ep from public.rng_raid_top where raid_id = p_raid order by ep desc limit 25) t) then
+    insert into public.rng_raid_top (raid_id, account_id, n, ep) values (p_raid, a, p_n, p_ep);
+    delete from public.rng_raid_top where raid_id = p_raid and id not in
+      (select id from public.rng_raid_top where raid_id = p_raid order by ep desc, id limit 25);
+  end if;
+  return json_build_object('ok', true, 'final', fin, 'raid', public.rng_raid_info(a));
+end $$;
+revoke all on function public.rng_raid_hit(text, bigint, int, numeric, int) from public;
+grant execute on function public.rng_raid_hit(text, bigint, int, numeric, int) to anon, authenticated;
+
+-- Reactions: + Bosco (raid loot, needs "rx:bosco" in the save's owned list, like the Gibbler).
+alter table public.rng_reacts drop constraint if exists rng_reacts_kind_check;
+alter table public.rng_reacts add constraint rng_reacts_kind_check check (kind in ('jerry', 'hampter', 'bobert', 'gibbler', 'bosco'));
+create or replace function public.rng_react(p_token text, p_event bigint, p_kind text default 'jerry') returns json
+  language plpgsql security definer set search_path = public as $$
+declare a uuid := public.rng_session(p_token); owner uuid;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  owner := (select account_id from public.rng_events where id = p_event and at > now() - interval '10 minutes');
+  if owner is null then return json_build_object('ok', false, 'error', 'old'); end if;
+  if owner = a then return json_build_object('ok', false, 'error', 'own'); end if;
+  if p_kind is null or p_kind not in ('jerry', 'hampter', 'bobert', 'gibbler', 'bosco') then return json_build_object('ok', false, 'error', 'kind'); end if;
+  if p_kind in ('gibbler', 'bosco') and not coalesce((select (data -> 'owned') ? ('rx:' || p_kind) from public.rng_saves where account_id = a), false) then
+    return json_build_object('ok', false, 'error', 'kind');
+  end if;
+  insert into public.rng_reacts (event_id, from_id, kind) values (p_event, a, p_kind) on conflict (event_id, from_id) do nothing;
+  return json_build_object('ok', true);
+end $$;
+revoke all on function public.rng_react(text, bigint, text) from public;
+grant execute on function public.rng_react(text, bigint, text) to anon, authenticated;
+
+-- Party Potions stack (Nico 25.11.): a potion during a running party adds its time (2 min + 1 min per other player online)
+-- instead of failing with party_running. One update on the rng_meta row, so two potions at the same moment both count.
+-- party_by / party_req = the last player who used one (lost-answer retries and 'preq' keep working for them).
+create or replace function public.rng_party_start(p_token text, p_req text default null) returns json
+  language plpgsql security definer set search_path = public, extensions as $$
+declare a uuid := public.rng_session(p_token); others int; dur interval;
+begin
+  if a is null then raise exception 'signed_out'; end if;
+  if p_req is not null and exists (select 1 from public.rng_meta where id and party_req = p_req and party_by = a) then
+    return public.rng_pulse(p_token, true);                         -- asked again after a lost answer: it's already counted
+  end if;
+  update public.rng_accounts set last_seen = now() where id = a;
+  others := (select count(*) from public.rng_accounts where last_seen > now() - interval '100 seconds' and id <> a);
+  dur := interval '2 minutes' + others * interval '1 minute';
+  update public.rng_meta
+     set party_ids = case when party_until > now()
+                          then array(select distinct x from unnest(party_ids || array(select id from public.rng_accounts where last_seen > now() - interval '100 seconds')) x)
+                          else array(select id from public.rng_accounts where last_seen > now() - interval '100 seconds') end,
+         party_until = case when party_until > now() then party_until + dur else now() + dur end,
+         party_by = a, party_req = p_req
+   where id;
+  return public.rng_pulse(p_token, true);
+end $$;
+revoke all on function public.rng_party_start(text, text) from public;
+grant execute on function public.rng_party_start(text, text) to anon, authenticated;
+
+-- This release needs everyone on v1.6.1 or newer.
+update public.rng_meta set min_ver = greatest(min_ver, 10601) where id;
+notify pgrst, 'reload schema';
+
+select id, wk, boss, hp, dmg, spawned_at is not null as summoned, won_at is not null as won from public.rng_raids where wk = public.rng_wk() order by id;
