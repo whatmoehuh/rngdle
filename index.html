@@ -2922,7 +2922,7 @@ function normalize(d) {
   if (Q && typeof Q === "object" && typeof Q.day === "string" && Array.isArray(Q.list))
     s.quest = { day: Q.day, last: Q.last && typeof Q.last.n === "number" ? { n: Q.last.n, s: String(Q.last.n), t: Number(Q.last.t) || 0, pt: Q.last.pt == null ? -1 : Number(Q.last.pt) } : null,
       last2: Q.last2 && typeof Q.last2.n === "number" ? { n: Q.last2.n, s: String(Q.last2.n), t: Number(Q.last2.t) || 0, pt: Q.last2.pt == null ? -1 : Number(Q.last2.pt) } : null,
-      list: Q.list.filter((q) => q && typeof q.id === "string").slice(0, 3).map((q) => ({ id: q.id, p: Number(q.p) || 0, run: Number(q.run) || 0,
+      list: Q.list.filter((q) => q && typeof q.id === "string").slice(0, 4).map((q) => ({ id: q.id, p: Number(q.p) || 0, run: Number(q.run) || 0,
         keys: Array.isArray(q.keys) ? q.keys.slice(0, 20) : [], done: q.done ? 1 : 0, claimed: q.claimed ? 1 : 0, daily: q.daily ? 1 : 0 })) };
   const W = d.wk;                                                  // v1.4.2 weekly server quest: this player's part of this week (k) and last week (pk)
   if (W && typeof W === "object") s.wk = { k: typeof W.k === "string" ? W.k : "", n: Math.max(0, Number(W.n) || 0), r: Math.max(0, Number(W.r) || 0), c: Math.min(2, Math.max(0, Number(W.c) || 0)),
@@ -3254,7 +3254,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "49d43035cde0";                                  // filled in by build_site.py
+const BUILD = "2a4d530d40ef";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -5094,6 +5094,8 @@ const QUEST_BY = Object.fromEntries(QUESTS.map((q) => [q.id, q]));
 const QUEST_PRISMS = { COMMON: 2, UNCOMMON: 5, RARE: 10, EPIC: 15, ANOMALY: 30, MYTHIC: 50, PRISMATIC: 100 }, DAILY_X = 3;
 const questReward = (q) => QUEST_PRISMS[QUEST_BY[q.id].d] * (q.daily ? DAILY_X : 1);
 const QUEST_SLOTS = [{ COMMON: 35, UNCOMMON: 30, RARE: 22, EPIC: 13 }, { COMMON: 35, UNCOMMON: 30, RARE: 22, EPIC: 13 }, { EPIC: 45, ANOMALY: 35, MYTHIC: 20, PRISMATIC: 3 }];
+// hotfix 27.11. (Nico): after the first Time Machine trip a 4th standard slot sits between #2 and #3; Epic+ stays at the bottom
+const qSlots = () => (presN() >= 1 ? [QUEST_SLOTS[0], QUEST_SLOTS[1], QUEST_SLOTS[0], QUEST_SLOTS[2]] : QUEST_SLOTS);
 const TRANK = { TRASH: 0, COMMON: 1, UNCOMMON: 2, RARE: 3, EPIC: 4, ANOMALY: 5, MYTHIC: 6 };
 const FISH_IMG = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAA0klEQVR4XmNgGGjAiMsBEmoO/5HlXtw6gFUtVkGQ5ufzBFDMlkz6gNUQDAPgmk/cwHCc5CwJuCEwF8INgAk8T3uBN1hBhoDADY8XDBo7JCAGgG0FaSy+ziAqKs/wuoILYoiFBgM2l3x8xADWDAoXFmTrQJrhAIdmGAC7gMHhP4oBcJuJADAXMMHUXj/xjQhtEMAvBwkDkNdRAnGf3j0UQzQtoGGBBLAGIgzAYgLdIBBwuqSEkg4wohEZoKdCGMCVGrECkCEf8jT+4zKMKECRZmIBAMuPVeoOHsGHAAAAAElFTkSuQmCC";
 const BOOST_X = 2, BOOST_N = 25, BOOST_MAX = 100;      // XP Boost (Nico 24.11.): 2x on the next 25 rolls (was 1.25x / 20); stacks up to 100 rolls
@@ -5131,7 +5133,7 @@ const SHOP = [
 ];
 function timeTravel() {                         // v1.6: back to level 1, max level +1; nothing else resets
   const from = level();
-  state.pres = presN() + 1; state.xp = 0; if (state.shop.btm === 1) state.shop.btm = 2;
+  state.pres = presN() + 1; state.xp = 0; if (state.shop.btm === 1) state.shop.btm = 2; ensureQuests();
   renderChrome(); renderSettings(); dirtyViews.add("ranking");
   notify(`<span class="big">🕰️</span><span class="lvt"><b>Time Machine</b><span>Level ${from} → 1. Max level is now ${maxLv()}.</span></span>`);
 }
@@ -5189,21 +5191,23 @@ function questPool(d, taken) {
 }
 /** A random normal quest for slot i (per player), never the same id/group as the other quests on the board. */
 function normalQuest(i, taken) {
-  const w = QUEST_SLOTS[i] || QUEST_SLOTS[0];
+  const w = qSlots()[i] || QUEST_SLOTS[0];
   let x = Math.random() * Object.values(w).reduce((a, b) => a + b, 0), d = "COMMON";
   for (const [k, v] of Object.entries(w)) { d = k; if ((x -= v) < 0) break; }
   const pool = questPool(d, taken);
   return newQuest(pool[Math.floor(Math.random() * pool.length)].id, 0);
 }
-/** Today's 3 daily quest ids (the same for everyone). */
-function dailyQuests(day) {
+/** Today's daily quest ids (the same for everyone). extra: the prestige slot, drawn after the usual 3 and put in at #3. */
+function dailyQuests(day, extra) {
   const rand = seededRand("rngdle-quests:" + day), out = [];
-  for (const w of QUEST_SLOTS) {
+  const pick = (w) => {
     let x = rand() * Object.values(w).reduce((a, b) => a + b, 0), d = "COMMON";
     for (const [k, v] of Object.entries(w)) { d = k; if ((x -= v) < 0) break; }
     const pool = questPool(d, out);
-    out.push(pool[Math.floor(rand() * pool.length)]);
-  }
+    return pool[Math.floor(rand() * pool.length)];
+  };
+  for (const w of QUEST_SLOTS) out.push(pick(w));
+  if (extra) out.splice(2, 0, pick(QUEST_SLOTS[0]));
   return out.map((q) => q.id);
 }
 const newQuest = (id, daily) => ({ id, daily: daily ? 1 : 0, p: 0, run: 0, keys: [], done: 0, claimed: 0 });
@@ -5211,11 +5215,17 @@ const newQuest = (id, daily) => ({ id, daily: daily ? 1 : 0, p: 0, run: 0, keys:
 function ensureQuests() {
   const Q = state.quest, day = periodKey("day");
   Q.list.forEach((q, i) => { if (!QUEST_BY[q.id]) { const nq = normalQuest(i, Q.list.filter((o, j) => j !== i).map((o) => QUEST_BY[o.id]).filter(Boolean)); nq.daily = q.daily ? 1 : 0; Q.list[i] = nq; } });   // quest removed in an update
-  if (Q.day === day && Q.list.length === 3) return 0;
+  const want = qSlots().length;
+  if (Q.day === day && Q.list.length === want) return 0;
+  if (Q.day === day && Q.list.length === 3 && want === 4) {      // first Time Machine trip mid-day: the extra slot shows up now, progress kept
+    const id = dailyQuests(day, 1)[2], def = QUEST_BY[id], taken = Q.list.map((o) => QUEST_BY[o.id]).filter(Boolean);
+    Q.list.splice(2, 0, taken.some((o) => o.id === id || (o.grp && o.grp === def.grp)) ? Object.assign(normalQuest(2, taken), { daily: 1 }) : newQuest(id, 1));
+    return 0;
+  }
   let paid = 0;
   for (const q of Q.list) if (q.done && !q.claimed && QUEST_BY[q.id]) { paid += questReward(q); q.claimed = 1; state.feats.qc += 1; }
   if (paid) { state.prisms += paid; state.prisms_total += paid; }
-  state.quest = { day, list: dailyQuests(day).map((id) => newQuest(id, 1)), last: null, last2: null };
+  state.quest = { day, list: dailyQuests(day, want === 4).map((id) => newQuest(id, 1)), last: null, last2: null };
   return paid;
 }
 /** Count one real roll towards today's quests. Returns the quests it finished. */
