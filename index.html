@@ -3254,7 +3254,7 @@ window.addEventListener("pageshow", (e) => { if (e.persisted && ready) { ping(tr
       (iPhones resume the home-screen app instead of reloading it, and GitHub Pages lets phones cache the page for 10 minutes.)
    B: the server knows the oldest game version it still accepts (rng_meta.min_ver). Older pages can't save or roll and reload too.
    The reload goes to ?v=<build>: a new address, so the phone can't answer it from its cache. */
-const BUILD = "2a4d530d40ef";                                  // filled in by build_site.py
+const BUILD = "ba72bd24c8af";                                  // filled in by build_site.py
 const verNum = () => APP_VERSION.split(".").reduce((a, x) => a * 100 + (Number(x) || 0), 0);   // "1.4.1" → 10401
 const UPD_KEY = "rngdle-site-upd";
 let updTo = "", updGoing = false, updChecked = 0;
@@ -4526,15 +4526,15 @@ const frameOk = (id, own) => !!id && FRAMES.some((f) => f.id === id) && (own || 
 const frameCls = (id, own) => (frameOk(id, own) ? ` fr fr-${id}` : "");
 // v1.6 prestige frames: one per level 90–99 (highest level reached), drawn on their own layer outside the shop frame
 const PFR = ["Bronze", "Silver", "Gold", "Emerald", "Sapphire", "Amethyst", "Ruby", "Diamond", "Cosmic", "Ascended"];
-const pfTier = (L) => (L >= 90 ? Math.min(10, L - 89) : 0);
-const pfCls = (L) => (pfTier(L) ? " pfh" : "");
-const pfEl = (L, pr) => { const t = pfTier(L), n = Math.min(10, Math.max(0, Math.floor(Number(pr) || 0)));   // pr = prestiges → one star each
+const pfTier = (L, pr) => (L >= 90 && pr >= 1 ? Math.min(10, L - 89) : 0);   // hotfix 28.11. (Nico): only after the first Time Machine trip
+const pfCls = (L, pr) => (pfTier(L, Number(pr) || 0) ? " pfh" : "");
+const pfEl = (L, pr) => { const t = pfTier(L, Number(pr) || 0), n = Math.min(10, Math.max(0, Math.floor(Number(pr) || 0)));   // pr = prestiges → one star each
   return !t ? "" : n > 5 ? `<i class="pf pf${t} ps pa" aria-hidden="true">${pfAround(n)}</i>`   // Nico 25.11.: 6+ stars sit evenly around the whole ring
     : `<i class="pf pf${t}${n ? " ps" : ""}" aria-hidden="true">${n ? `<b class="pst">${"★".repeat(n)}</b>` : ""}</i>`; };
 /** n stars spread evenly around the ring (first one at the top), on a rounded-square path (superellipse) so they sit on the border. */
 const pfAround = (n) => Array.from({ length: n }, (_, k) => { const a = 2 * Math.PI * k / n, f = (v) => Math.sign(v) * Math.sqrt(Math.abs(v));
   return `<b class="psa" style="left:${(50 + 50 * f(Math.sin(a))).toFixed(1)}%;top:${(50 - 50 * f(Math.cos(a))).toFixed(1)}%;animation-delay:${(-k * 2.4 / n).toFixed(2)}s">★</b>`; }).join("");
-function avatarHTML(p) { const L = ulv(p); return `<span class="av${frameCls(p.fr, p.buy)}${pfCls(L)}"><img src="${AV_URL[avatarOf(p)]}" alt="">${pfEl(L, p.pl)}</span>`; }
+function avatarHTML(p) { const L = ulv(p); return `<span class="av${frameCls(p.fr, p.buy)}${pfCls(L, p.pl)}"><img src="${AV_URL[avatarOf(p)]}" alt="">${pfEl(L, p.pl)}</span>`; }
 const DECO = {
   default: "",
   hell: `<span class="d-fl"></span>`,
@@ -4804,7 +4804,7 @@ function renderSettings0() {
   const mine = Object.keys(state.ach), av = avatarOf({ id: uid, av: state.cos.avatar, lv: L, achs: mine }), ns = allowedStyle(state.cos.name, L), sk = effSkin();
   const count = (list) => `${list.filter((x) => unlockedAt(list, x.id, L)).length} / ${list.length}`;
   $("set-sub").textContent = `Level ${Ls} · ${fmtXP(state.xp || 0)} XP`;
-  $("set-card").innerHTML = `<span class="av pcav${frameCls(state.cos.frame, state.owned)}${pfCls(L)}"><img src="${AV_URL[av]}" alt="">${pfEl(L, presN())}</span><div style="min-width:0"><div class="pname">${nameHTML(nm, ns)}<span class="lvc">LV ${Ls}</span></div>` +
+  $("set-card").innerHTML = `<span class="av pcav${frameCls(state.cos.frame, state.owned)}${pfCls(L, presN())}"><img src="${AV_URL[av]}" alt="">${pfEl(L, presN())}</span><div style="min-width:0"><div class="pname">${nameHTML(nm, ns)}<span class="lvc">LV ${Ls}</span></div>` +
     `<small>How others see you on the leaderboard</small></div>`;
   $("set-avn").textContent = `${AVATARS.filter((a) => avOk(a, L, mine)).length} / ${AVATARS.length}`; $("set-bgn").textContent = count(BACKGROUNDS); $("set-dsn").textContent = count(NUMBER_STYLES); $("set-skn").textContent = count(SKINS); $("set-nsn").textContent = count(NAME_STYLES);
   $("set-av").innerHTML = AVATARS.map((a) => {
@@ -4917,7 +4917,7 @@ function showLevelUp(to, from) {
   const un = [];
   const seen = peakOf(1, presN());
   for (let L = Math.max((from || to - 1) + 1, seen + 1); L <= to; L++) {
-    if (L >= 90 && L <= 99) un.push("−0.1 s cooldown", `${PFR[L - 90]} Frame`);      // v1.6 prestige levels
+    if (L >= 90 && L <= 99) un.push("−0.1 s cooldown", ...(presN() ? [`${PFR[L - 90]} Frame`] : []));      // v1.6 prestige levels
     for (const a of AVATARS) if (a.lv === L) un.push(a.name);
     for (const s of SKINS) if (s.lv === L) un.push(`${s.name} button`);
     for (const n of NAME_STYLES) if (n.lv === L) un.push(`${n.name} name`);
